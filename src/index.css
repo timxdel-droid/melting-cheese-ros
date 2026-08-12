@@ -1,0 +1,111 @@
+/* Melting Cheese ROS — design tokens & base
+   Source: Figma "Melting Cheese — App & Web v2 (Timmy Edition)", ROS frames */
+
+:root {
+  /* Brand */
+  --mc-orange: #F5A623;
+  --mc-orange-deep: #F08C1A;
+  --mc-amber-soft: #FDE7C2;
+  --mc-cheese: #FFC93C;
+
+  /* Surfaces */
+  --bg: #F6F6F8;
+  --surface: #FFFFFF;
+  --surface-alt: #FAFAFB;
+  --line: #ECECF0;
+
+  /* Text */
+  --ink: #1C1C1E;
+  --ink-2: #55555C;
+  --ink-3: #9A9AA2;
+
+  /* Accents seen across the dashboard */
+  --blue: #2563EB;
+  --green: #22A55B;
+  --green-soft: #E5F6EC;
+  --red: #E5484D;
+  --red-soft: #FDEBEC;
+  --purple: #8B5CF6;
+  --purple-soft: #F1EBFE;
+  --teal: #0EA5A5;
+  --amber-chip: #FFF4DE;
+  --blue-soft: #E8F0FE;
+
+  --radius: 12px;
+  --radius-lg: 16px;
+  --shadow: 0 1px 3px rgba(20, 20, 30, 0.06);
+
+  font-family: "Inter", -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+button {
+  font: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+}
+
+input, select {
+  font: inherit;
+  color: var(--ink);
+}
+
+/* ---- shared primitives ---- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.pill.green  { background: var(--green-soft);  color: var(--green); }
+.pill.orange { background: var(--amber-chip);  color: var(--mc-orange-deep); }
+.pill.red    { background: var(--red-soft);    color: var(--red); }
+.pill.blue   { background: var(--blue-soft);   color: var(--blue); }
+.pill.gray   { background: #F0F0F3;            color: var(--ink-2); }
+
+.btn-primary {
+  background: var(--mc-orange);
+  color: #fff;
+  font-weight: 700;
+  border-radius: 10px;
+  padding: 10px 18px;
+}
+.btn-primary:hover { background: var(--mc-orange-deep); }
+
+/* Cheese drip strip used on the login frame and sidebar footer card */
+.drip {
+  height: 34px;
+  background:
+    radial-gradient(18px 22px at 24px 0, var(--mc-cheese) 98%, transparent) ,
+    radial-gradient(14px 30px at 64px 0, var(--mc-orange) 98%, transparent),
+    radial-gradient(20px 16px at 108px 0, var(--mc-cheese) 98%, transparent),
+    radial-gradient(15px 26px at 150px 0, var(--mc-orange) 98%, transparent);
+  background-repeat: repeat-x;
+  background-size: 170px 34px;
+}
+.drip.flip { transform: scaleY(-1); }
