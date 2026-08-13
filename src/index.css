@@ -97,6 +97,32 @@ input, select {
 }
 .btn-primary:hover { background: var(--mc-orange-deep); }
 
+/* ---- responsive layer ----
+   Screens use inline grid styles; on small viewports we collapse every
+   inline grid to a single column, make cards horizontally scrollable so
+   tables survive, and turn the sidebar into a slide-in drawer. */
+
+.hamburger { display: none; font-size: 20px; padding: 4px 8px; }
+
+@media (max-width: 1120px) {
+  main { padding: 12px !important; }
+}
+
+@media (max-width: 880px) {
+  [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
+  .card { overflow-x: auto; }
+  .card table { min-width: 540px; }
+  .hamburger { display: inline-flex; }
+  .sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 60;
+    transform: translateX(-105%); transition: transform 0.25s ease;
+  }
+  .sidebar.open { transform: none; box-shadow: 0 0 48px rgba(20,20,30,0.35); }
+  .sidebar-overlay {
+    position: fixed; inset: 0; z-index: 55; background: rgba(20,20,30,0.35);
+  }
+}
+
 /* Cheese drip strip used on the login frame and sidebar footer card */
 .drip {
   height: 34px;
