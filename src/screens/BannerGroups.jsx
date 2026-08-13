@@ -69,8 +69,8 @@ export default function BannerGroups() {
             <tbody>
               {GROUPS.map(g => (
                 <tr key={g.id} style={{ borderTop: '1px solid var(--line)' }}>
-                  <td style={{ padding: '9px 4px' }}>
-                    <div style={{ fontWeight: 700 }}>{g.name}</div>
+                  <td style={{ padding: '9px 4px', cursor: 'pointer' }} onClick={() => nav('/promotions/banner-groups/detail')}>
+                    <div style={{ fontWeight: 700, color: 'var(--mc-orange-deep)' }}>{g.name}</div>
                     <div style={muted}>{g.id}</div>
                   </td>
                   <td style={{ textAlign: 'center' }}>{g.banners}</td>
@@ -100,7 +100,8 @@ export default function BannerGroups() {
             <div style={{ display: 'flex' }}>
               <h3 style={h3}>Group Details</h3>
               <div style={{ flex: 1 }} />
-              <span style={{ ...muted, cursor: 'pointer' }}>View Full Details</span>
+              <span style={{ ...muted, cursor: 'pointer', color: 'var(--mc-orange-deep)' }}
+                onClick={() => nav('/promotions/banner-groups/detail')}>View Full Details</span>
             </div>
             <div style={{
               borderRadius: 10, background: 'var(--mc-cheese)', padding: '18px 12px',
