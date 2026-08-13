@@ -12,6 +12,24 @@ const label = { fontSize: 11, color: 'var(--ink-2)', display: 'block', margin: '
 
 const PLATFORMS = ['Mobile App', 'eMenu (QR)', 'Website', 'Kiosk', 'Display Board', 'Menu Board']
 
+/* Small visual toggle per the refined design (Figma 132-11). */
+function Toggle({ on, label }) {
+  return (
+    <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, cursor: 'pointer' }}>
+      <span style={{
+        width: 34, height: 19, borderRadius: 10, position: 'relative', flexShrink: 0,
+        background: on ? 'var(--mc-orange)' : 'var(--line)', transition: 'background .15s',
+      }}>
+        <span style={{
+          position: 'absolute', top: 2, left: on ? 17 : 2, width: 15, height: 15,
+          borderRadius: 8, background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.25)', transition: 'left .15s',
+        }} />
+      </span>
+      {label}
+    </label>
+  )
+}
+
 export default function BannerEdit() {
   const nav = useNavigate()
   return (
@@ -80,12 +98,19 @@ export default function BannerEdit() {
             <h3 style={h3}>3. Display Settings</h3>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
               {PLATFORMS.map((p, i) => (
-                <label key={p} style={{
-                  display: 'flex', gap: 7, alignItems: 'center', fontSize: 12,
-                  border: '1px solid var(--line)', borderRadius: 9, padding: '8px 12px',
+                <span key={p} style={{
+                  position: 'relative', display: 'flex', gap: 7, alignItems: 'center', fontSize: 12,
+                  border: '1px solid ' + (i !== 3 ? 'var(--mc-orange)' : 'var(--line)'),
+                  background: i !== 3 ? 'var(--amber-chip)' : '#fff',
+                  borderRadius: 9, padding: '9px 13px', fontWeight: 600, cursor: 'pointer',
                 }}>
-                  <input type="checkbox" defaultChecked={i !== 3} /> {p}
-                </label>
+                  {p}
+                  {i !== 3 && <span style={{
+                    position: 'absolute', top: -6, right: -6, width: 16, height: 16, borderRadius: 8,
+                    background: 'var(--mc-orange)', color: '#fff', fontSize: 10, fontWeight: 800,
+                    display: 'grid', placeItems: 'center',
+                  }}>✓</span>}
+                </span>
               ))}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
@@ -110,10 +135,10 @@ export default function BannerEdit() {
           <div className="card" style={card}>
             <h3 style={h3}>5. Advanced Options</h3>
             <div style={{ display: 'flex', gap: 22, fontSize: 12, flexWrap: 'wrap' }}>
-              <label style={{ display: 'flex', gap: 7, alignItems: 'center' }}><input type="checkbox" /> Show to first-time visitors only</label>
-              <label style={{ display: 'flex', gap: 7, alignItems: 'center' }}><input type="checkbox" defaultChecked /> Show to existing users</label>
-              <label style={{ display: 'flex', gap: 7, alignItems: 'center' }}><input type="checkbox" /> Show shop-per-location</label>
-              <label style={{ display: 'flex', gap: 7, alignItems: 'center' }}><input type="checkbox" defaultChecked /> Enable analytics tracking</label>
+              <Toggle on={false} label="Show to first-time visitors only" />
+              <Toggle on={true} label="Show to existing users" />
+              <Toggle on={false} label="Show shop-per-location" />
+              <Toggle on={true} label="Enable analytics tracking" />
             </div>
           </div>
         </div>
@@ -121,10 +146,12 @@ export default function BannerEdit() {
         {/* Right rail */}
         <div style={{ display: 'grid', gap: 14 }}>
           <div className="card" style={card}>
-            <div style={{ display: 'flex', marginBottom: 10 }}>
-              <h3 style={{ ...h3, margin: 0 }}>Live Preview</h3>
-              <div style={{ flex: 1 }} />
-              <span className="pill orange">Mobile App</span>
+            <h3 style={{ ...h3, marginBottom: 8 }}>Live Preview</h3>
+            <div style={{ display: 'flex', gap: 5, marginBottom: 12, flexWrap: 'wrap' }}>
+              <span className="pill orange" style={{ background: 'var(--mc-orange)', color: '#fff' }}>Mobile App</span>
+              <span className="pill gray">eMenu (QR)</span>
+              <span className="pill gray">Website</span>
+              <span className="pill gray">Display Board</span>
             </div>
             <div style={{
               width: 168, margin: '0 auto', border: '7px solid #1C1C1E', borderRadius: 24,
