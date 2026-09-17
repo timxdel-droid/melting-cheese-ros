@@ -30,6 +30,15 @@ const mono = { ...field, fontFamily: 'monospace', fontSize: 11.5 }
 const muted = { color: 'var(--ink-3)', fontSize: 11 }
 const label = { fontSize: 11, fontWeight: 700, display: 'block', marginBottom: 3 }
 
+/* Who told the server this build number. "app" means a real copy of the app
+   said so when it last fetched its config, which is the normal case — there is
+   no build pipeline holding a token. */
+const REPORT_SOURCES = {
+  app: 'the app itself',
+  codemagic: 'Codemagic',
+  pipeline: 'the build pipeline',
+}
+
 export default function AppReleases() {
   const [releases, setReleases] = useState(loadReleases)
   const [busy, setBusy] = useState(false)
@@ -157,7 +166,7 @@ function Platform({ name, note, release, reported, onChange, allowUpload }) {
   const reportedWhen = reported
     ? new Date(reported.at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
     : null
-  const reportedFrom = reported ? (reported.from === 'codemagic' ? 'Codemagic' : reported.from) : null
+  const reportedFrom = reported ? (REPORT_SOURCES[reported.from] || reported.from) : null
   const [uploading, setUploading] = useState(false)
   const [percent, setPercent] = useState(0)
   const [uploadMsg, setUploadMsg] = useState(null)
