@@ -194,36 +194,42 @@ export default function BannerLibrary() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.25fr)', gap: 14 }}>
+        {/* Two cards side by side when there is room, stacked when the device
+            preview on the right has eaten the width. Below ~740px of usable
+            width the packs list was down to ~300px: names broke one word
+            per line and the status pills were clipped off the edge. */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 14 }}>
 
           <div className="card" style={{ padding: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 11 }}>
-              <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+              <div style={{ minWidth: 0 }}>
                 <b style={{ fontSize: 13.5 }}>Banner packs</b>
                 <div style={muted}>Select a concept to edit or place</div>
               </div>
               <div style={{ flex: 1 }} />
-              <span className="pill gray">{packs.length} PACKS</span>
+              <span className="pill gray" style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>{packs.length} PACKS</span>
             </div>
-            <div style={{ display: 'grid', gap: 8 }}>
+            <div style={{ display: 'grid', gap: 10 }}>
               {packs.map(p => {
                 const on = p.id === pack.id
                 const placedAs = Object.entries(inPlacement).find(([, v]) => v && v.id === p.id)
                 const [cls, label] = STATUS[p.status] || STATUS.draft
                 return (
                   <button key={p.id} onClick={() => setSelected(p.id)} style={{
-                    display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', width: '100%',
+                    display: 'flex', alignItems: 'flex-start', gap: 12, textAlign: 'left', width: '100%',
                     border: '1px solid ' + (on ? 'var(--mc-orange)' : 'var(--line)'),
-                    borderRadius: 10, padding: 9, cursor: 'pointer', background: 'var(--surface)',
+                    borderRadius: 10, padding: '11px 12px', cursor: 'pointer', background: 'var(--surface)',
                   }}>
-                    <span style={{ width: 52, height: 34, borderRadius: 5, background: 'linear-gradient(135deg,#FFC93C,#F5A623)', flexShrink: 0 }} />
+                    <span style={{ width: 52, height: 34, borderRadius: 5, background: 'linear-gradient(135deg,#FFC93C,#F5A623)', flexShrink: 0, marginTop: 1 }} />
                     <span style={{ minWidth: 0, flex: 1 }}>
-                      <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600 }}>{p.name}</span>
-                      <span style={{ display: 'block', ...muted }}>
+                      <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, lineHeight: 1.3 }}>{p.name}</span>
+                      <span style={{ display: 'block', ...muted, marginTop: 3, lineHeight: 1.45 }}>
                         {p.purpose}{placedAs ? ' · ' + PLACEMENTS.find(x => x.id === placedAs[0]).name : ' · available in library'}
                       </span>
                     </span>
-                    <span className={'pill ' + cls}>{label}</span>
+                    {/* Never let the pill shrink or wrap - it is the one thing
+                        an operator scans this list for. */}
+                    <span className={'pill ' + cls} style={{ flexShrink: 0, whiteSpace: 'nowrap', marginTop: 2 }}>{label}</span>
                   </button>
                 )
               })}
@@ -231,13 +237,13 @@ export default function BannerLibrary() {
           </div>
 
           <div className="card" style={{ padding: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 11 }}>
-              <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+              <div style={{ minWidth: 0 }}>
                 <b style={{ fontSize: 13.5 }}>{pack.name}</b>
                 <div style={muted}>Three controlled responsive variants</div>
               </div>
               <div style={{ flex: 1 }} />
-              <span className={'pill ' + (pack.complete ? 'green' : 'orange')}>
+              <span className={'pill ' + (pack.complete ? 'green' : 'orange')} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {pack.complete ? 'COMPLETE' : 'NEEDS ARTWORK'}
               </span>
             </div>

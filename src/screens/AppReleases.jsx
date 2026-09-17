@@ -1,7 +1,7 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   loadReleases, saveReleases, releaseProblems, uploadApk, hasApiToken,
-  buildAppConfig, publishAppConfig, loadPublishState,
+  buildAppConfig, publishAppConfig, loadPublishState, fetchAppConfig,
   loadLayouts, loadBannerPacks, loadEvents,
 } from '../lib/connectors.js'
 
@@ -39,6 +39,35 @@ export default function AppReleases() {
   const connected = hasApiToken()
   const problems = releaseProblems(releases)
 
+  /* Builds reported by the pipeline (Codemagic posts to mc/v1/releases/report
+     after each TestFlight upload). Read from the published config on load;
+     those numbers are facts, so they overwrite whatever was typed here and
+     the field is locked while a report exists. */
+  const [reported, setReported] = useState({ android: null, ios: null })
+  useEffect(() => {
+    let cancelled = false
+    fetchAppConfig().then(res => {
+      if (cancelled || !res.ok || !res.config || !res.config.app) return
+      const next = { android: null, ios: null }
+      const merged = { ...releases }
+      for (const platform of ['android', 'ios']) {
+        const r = res.config.app[platform]
+        if (!r || !r.reported_at) continue
+        next[platform] = { at: r.reported_at, from: r.reported_from || 'pipeline', build: r.latest_build }
+        merged[platform] = {
+          ...merged[platform],
+          latestBuild: Number(r.latest_build) || 0,
+          versionName: r.version_name || merged[platform].versionName,
+        }
+      }
+      setReported(next)
+      setReleases(merged)
+      saveReleases(merged)
+    })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const patch = (platform, changes) => {
     const next = { ...releases, [platform]: { ...releases[platform], ...changes } }
     setReleases(next)
@@ -74,6 +103,7 @@ export default function AppReleases() {
         name="Android"
         note="Sideloaded APK. The app downloads and verifies the file, then Android asks the customer to confirm the install — no app can install silently."
         release={releases.android}
+        reported={reported.android}
         onChange={changes => patch('android', changes)}
         allowUpload
       />
@@ -82,6 +112,7 @@ export default function AppReleases() {
         name="iOS"
         note="Distributed through TestFlight, so there is no file to host. The required build still works: below it the app refuses to run and points people at TestFlight."
         release={releases.ios}
+        reported={reported.ios}
         onChange={changes => patch('ios', changes)}
       />
 
@@ -122,7 +153,11 @@ export default function AppReleases() {
 
 /* ---------------- one platform ---------------- */
 
-function Platform({ name, note, release, onChange, allowUpload }) {
+function Platform({ name, note, release, reported, onChange, allowUpload }) {
+  const reportedWhen = reported
+    ? new Date(reported.at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+    : null
+  const reportedFrom = reported ? (reported.from === 'codemagic' ? 'Codemagic' : reported.from) : null
   const [uploading, setUploading] = useState(false)
   const [percent, setPercent] = useState(0)
   const [uploadMsg, setUploadMsg] = useState(null)
@@ -164,9 +199,16 @@ function Platform({ name, note, release, onChange, allowUpload }) {
         </div>
         <div>
           <label style={label}>Latest build</label>
-          <input style={field} type="number" min="0" value={release.latestBuild}
+          <input style={{ ...field, ...(reported ? { background: 'var(--surface-alt)', color: 'var(--ink-2)' } : {}) }}
+            type="number" min="0" value={release.latestBuild}
+            readOnly={!!reported}
+            title={reported ? 'Set by the build pipeline - not editable here' : undefined}
             onChange={e => onChange({ latestBuild: Math.max(0, Number(e.target.value) || 0) })} />
-          <div style={{ ...muted, marginTop: 3 }}>Offers an update above this</div>
+          <div style={{ ...muted, marginTop: 3 }}>
+            {reported
+              ? <span style={{ color: 'var(--green)' }}>Reported by {reportedFrom} · {reportedWhen}</span>
+              : 'Offers an update above this'}
+          </div>
         </div>
         <div>
           <label style={label}>Version name</label>
