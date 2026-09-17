@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import DevicePreview from '../components/DevicePreview.jsx'
 import {
   loadEvents, loadSyncedProducts, loadLayouts, saveLayouts, blankLayout,
   loadBannerPacks, saveBannerPacks, PLACEMENTS, VARIANTS, RENDITIONS,
   buildAppConfig, publishAppConfig, loadPublishState, hasWpAuth,
+  uploadMedia, loadConnectors, packArt, packComplete,
 } from '../lib/connectors.js'
 
 /* Screen: Content & App › Banner Library
@@ -41,6 +42,19 @@ export default function BannerLibrary() {
 
   const savePacks = next => { setPacks(next); saveBannerPacks(next) }
   const patchPack = patch => savePacks(packs.map(p => p.id === pack.id ? { ...p, ...patch } : p))
+
+  /* Records one uploaded crop. Passing null clears it, which is how a wrong
+     file gets replaced — the pack is the record of what is published, so a
+     bad upload must be removable without deleting the whole pack. */
+  const patchArt = (variant, rendition, url) => {
+    const art = { ...(pack.art || {}) }
+    const set = { ...(art[variant] || {}) }
+    if (url) set[rendition] = url
+    else delete set[rendition]
+    if (Object.keys(set).length) art[variant] = set
+    else delete art[variant]
+    patchPack({ art, complete: packComplete({ ...pack, art }) })
+  }
 
   const setLayout = patch => {
     const next = { ...layouts, [eventId]: { ...layout, ...patch, changes: (layout.changes || 0) + 1 } }
@@ -95,9 +109,6 @@ export default function BannerLibrary() {
             </div>
           </div>
           <div style={{ flex: 1 }} />
-          <button style={sel} onClick={() => window.alert('Asset upload needs media storage — see the release blockers in the brief.')}>
-            Upload assets
-          </button>
           <button style={sel} onClick={newPack}>+ New banner pack</button>
           <button className="btn-primary" style={{ fontSize: 12.5 }} onClick={publish} disabled={busy || !connected}>
             {busy ? 'Publishing…' : 'Publish to apps'}
@@ -116,9 +127,10 @@ export default function BannerLibrary() {
           padding: '11px 13px', fontSize: 11.5, color: 'var(--ink-2)', lineHeight: 1.55,
         }}>
           <b style={{ color: 'var(--mc-orange-deep)' }}>Banner rule:</b>{' '}
-          every concept retains Text + CTA, Text without button, and Image-only versions with app,
-          mobile, tablet and desktop crops. Placement is event-specific; the Header Banner remains
-          the first editable home-content slot.
+          every concept keeps Text + CTA, Text without button, and Image-only versions. Each can
+          carry app, mobile, tablet and desktop crops, but only the app crop is needed to go live —
+          the rest fall back to it. Placement is event-specific; the Header Banner remains the first
+          editable home-content slot.
         </div>
 
         <div className="card" style={{ padding: 14, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -243,36 +255,23 @@ export default function BannerLibrary() {
                 <div style={muted}>Three controlled responsive variants</div>
               </div>
               <div style={{ flex: 1 }} />
-              <span className={'pill ' + (pack.complete ? 'green' : 'orange')} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-                {pack.complete ? 'COMPLETE' : 'NEEDS ARTWORK'}
+              {/* Derived from the artwork actually on the pack rather than a
+                  stored flag, which used to claim COMPLETE for packs that had
+                  never had a file uploaded. */}
+              <span className={'pill ' + (packComplete(pack) ? 'green' : 'orange')} style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+                {packComplete(pack) ? 'COMPLETE' : 'NEEDS ARTWORK'}
               </span>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10 }}>
               {VARIANTS.map(v => (
-                <div key={v.id} style={{
-                  border: '1px solid ' + (v.id === 'cta' ? 'var(--mc-orange)' : 'var(--line)'),
-                  borderRadius: 9, overflow: 'hidden',
-                }}>
-                  <div style={{
-                    height: 74, background: v.id === 'image' ? '#8C6A3A' : 'linear-gradient(135deg,#FFC93C,#F5A623)',
-                    padding: 8, display: 'flex', flexDirection: 'column', justifyContent: 'center',
-                  }}>
-                    {v.id !== 'image' && (
-                      <>
-                        <div style={{ fontSize: 8, fontWeight: 800, lineHeight: 1.1 }}>{pack.headline.split('.')[0]}.</div>
-                        <div style={{ fontSize: 7.5, fontWeight: 800, color: 'var(--mc-orange-deep)' }}>{pack.headline.split('.')[1] || ''}</div>
-                      </>
-                    )}
-                    {v.id === 'cta' && (
-                      <span style={{ marginTop: 5, alignSelf: 'flex-start', background: '#1C1C1E', color: '#fff', fontSize: 6.5, fontWeight: 700, padding: '3px 6px', borderRadius: 4 }}>{pack.cta}</span>
-                    )}
-                  </div>
-                  <div style={{ padding: '8px 9px' }}>
-                    <div style={{ fontSize: 11.5, fontWeight: 700 }}>{v.label}</div>
-                    <div style={{ ...muted, marginTop: 2, lineHeight: 1.4 }}>{v.note}</div>
-                  </div>
-                </div>
+                <VariantColumn
+                  key={v.id}
+                  variant={v}
+                  pack={pack}
+                  connected={connected}
+                  onArt={(rendition, url) => patchArt(v.id, rendition, url)}
+                />
               ))}
             </div>
 
@@ -298,17 +297,25 @@ export default function BannerLibrary() {
             </div>
 
             <div style={{ marginTop: 13 }}>
-              <div style={{ ...muted, marginBottom: 5 }}>Responsive renditions required</div>
+              <div style={{ ...muted, marginBottom: 5 }}>Crops carried by this pack</div>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {RENDITIONS.map(r => (
-                  <span key={r} className={'pill ' + (pack.complete ? 'green' : 'gray')} style={{ fontFamily: 'monospace', fontSize: 10 }}>{r}</span>
-                ))}
+                {RENDITIONS.map(r => {
+                  const have = VARIANTS.filter(v => pack.art && pack.art[v.id] && pack.art[v.id][r.id]).length
+                  return (
+                    <span key={r.id}
+                      className={'pill ' + (have === VARIANTS.length ? 'green' : have ? 'orange' : 'gray')}
+                      style={{ fontFamily: 'monospace', fontSize: 10 }}
+                      title={r.label + ' ' + r.size + ' — ' + have + ' of ' + VARIANTS.length + ' variants uploaded'}>
+                      {r.size} · {have}/{VARIANTS.length}
+                    </span>
+                  )
+                })}
               </div>
-              {!pack.complete && (
-                <div style={{ ...muted, marginTop: 7, color: 'var(--mc-orange-deep)' }}>
-                  Artwork isn’t uploaded for this pack. Media storage is a release blocker in the brief.
-                </div>
-              )}
+              <div style={{ ...muted, marginTop: 7, lineHeight: 1.5 }}>
+                Only the <b>{RENDITIONS[0].size}</b> crop is needed to go live. The others are
+                different shapes rather than different sizes, so they can’t be generated from
+                it — until one is uploaded, that device falls back to the app crop.
+              </div>
             </div>
           </div>
         </div>
@@ -321,6 +328,131 @@ export default function BannerLibrary() {
         categories={catalogue}
         note={'Placement preview: Header Banner after location selection. Assignment stays specific to ' + (event?.name || 'the global default') + '.'}
       />
+    </div>
+  )
+}
+
+/* ---------------- one variant, with its four crops ---------------- */
+
+/* A column per variant. The app crop leads because it is the one that has to
+   exist; the other three sit under it as a compact row, each showing either
+   its own artwork or the fact that it is borrowing the app crop. */
+function VariantColumn({ variant, pack, connected, onArt }) {
+  const [busy, setBusy] = useState(null)
+  const [error, setError] = useState(null)
+  const lead = packArt(pack, variant.id, 'app')
+
+  const send = async (rendition, file) => {
+    if (!file) return
+    setError(null)
+    setBusy(rendition)
+    const res = await uploadMedia(loadConnectors(), file)
+    setBusy(null)
+    if (res.ok) onArt(rendition, res.image.src)
+    else setError(res.message)
+  }
+
+  return (
+    <div style={{
+      border: '1px solid ' + (variant.id === 'cta' ? 'var(--mc-orange)' : 'var(--line)'),
+      borderRadius: 9, overflow: 'hidden', display: 'flex', flexDirection: 'column',
+    }}>
+      <CropSlot
+        rendition={RENDITIONS[0]}
+        url={lead}
+        busy={busy === 'app'}
+        disabled={!connected}
+        height={74}
+        onFile={f => send('app', f)}
+        onClear={() => onArt('app', null)}
+      />
+
+      <div style={{ padding: '8px 9px', flex: 1 }}>
+        <div style={{ fontSize: 11.5, fontWeight: 700 }}>{variant.label}</div>
+        <div style={{ ...muted, marginTop: 2, lineHeight: 1.4 }}>{variant.note}</div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 5, marginTop: 8 }}>
+          {RENDITIONS.slice(1).map(r => (
+            <CropSlot
+              key={r.id}
+              rendition={r}
+              url={pack.art && pack.art[variant.id] ? pack.art[variant.id][r.id] : null}
+              inherited={lead}
+              busy={busy === r.id}
+              disabled={!connected || !lead}
+              height={34}
+              compact
+              onFile={f => send(r.id, f)}
+              onClear={() => onArt(r.id, null)}
+            />
+          ))}
+        </div>
+
+        {error && (
+          <div style={{ fontSize: 10.5, color: 'var(--red)', marginTop: 6, lineHeight: 1.4 }}>{error}</div>
+        )}
+        {!connected && (
+          <div style={{ ...muted, marginTop: 6 }}>Add the API token in Sync to upload.</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/* One upload target. Shows the artwork when there is some, the crop it is
+   borrowing when there is not, and a spinner while a file is in flight. */
+function CropSlot({ rendition, url, inherited, busy, disabled, height, compact, onFile, onClear }) {
+  const input = useRef(null)
+  const shown = url || inherited
+  const borrowed = !url && !!inherited
+
+  return (
+    <div
+      title={rendition.label + ' · ' + rendition.size + (borrowed ? ' — using the app crop until one is uploaded' : '')}
+      onDragOver={e => { if (!disabled) e.preventDefault() }}
+      onDrop={e => {
+        if (disabled) return
+        e.preventDefault()
+        onFile(e.dataTransfer.files[0])
+      }}
+      style={{
+        height, position: 'relative', cursor: disabled ? 'default' : 'pointer',
+        background: shown ? '#00000010' : 'var(--surface-alt, #F4F2EE)',
+        backgroundImage: shown ? 'url(' + shown + ')' : 'none',
+        backgroundSize: 'cover', backgroundPosition: 'center',
+        borderTop: compact ? '1px solid var(--line)' : 'none',
+        borderRadius: compact ? 5 : 0,
+        opacity: borrowed ? 0.45 : 1,
+        display: 'grid', placeItems: 'center',
+      }}
+      onClick={() => { if (!disabled) input.current.click() }}>
+
+      {busy && (
+        <span style={{
+          fontSize: compact ? 8 : 10, fontWeight: 700, background: '#000000AA',
+          color: '#fff', padding: '2px 6px', borderRadius: 4,
+        }}>Uploading…</span>
+      )}
+
+      {!busy && !shown && (
+        <span style={{ fontSize: compact ? 8 : 10.5, color: 'var(--ink-3)', textAlign: 'center', lineHeight: 1.3 }}>
+          {compact ? rendition.size.split('×')[0] + 'w' : 'Drop ' + rendition.size}
+        </span>
+      )}
+
+      {!busy && url && (
+        <button
+          onClick={e => { e.stopPropagation(); onClear() }}
+          title="Remove this crop"
+          style={{
+            position: 'absolute', top: 2, right: 2, width: 15, height: 15, lineHeight: '13px',
+            borderRadius: 4, border: 'none', background: '#000000AA', color: '#fff',
+            fontSize: 10, cursor: 'pointer', padding: 0,
+          }}>×</button>
+      )}
+
+      <input ref={input} type="file" accept="image/*" hidden
+        onChange={e => { const f = e.target.files[0]; e.target.value = ''; onFile(f) }} />
     </div>
   )
 }
