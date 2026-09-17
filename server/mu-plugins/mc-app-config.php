@@ -591,9 +591,36 @@ function mc_app_config_clean_slot( $slot ) {
 	);
 }
 
+/**
+ * Accepts a banner image URL, or nothing.
+ *
+ * Artwork must live in this site's own uploads. Every legitimate crop got
+ * there through mc/v1/media, so that is not a restriction in practice — but
+ * the published config is what thousands of phones fetch and render, and a
+ * console account that could point them at an arbitrary host would turn one
+ * compromised token into a way to serve any image to every customer.
+ */
+function mc_app_config_clean_image_url( $url ) {
+	$url = esc_url_raw( trim( (string) $url ), array( 'https' ) );
+	if ( ! $url ) {
+		return null;
+	}
+
+	$uploads = wp_get_upload_dir();
+	$base    = isset( $uploads['baseurl'] ) ? set_url_scheme( $uploads['baseurl'], 'https' ) : '';
+	if ( ! $base || 0 !== strpos( set_url_scheme( $url, 'https' ), trailingslashit( $base ) ) ) {
+		return null;
+	}
+
+	return $url;
+}
+
 function mc_app_config_clean_banners( $banners ) {
 	$allowed_status  = array( 'live', 'scheduled', 'draft' );
 	$allowed_variant = array( 'cta', 'plain', 'image' );
+	// Four genuinely different shapes, not four sizes of one picture, so the
+	// server cannot derive the others from `app`. It is only required one.
+	$allowed_crop    = array( 'app', 'portrait', 'tablet', 'desktop' );
 	$out = array();
 
 	foreach ( (array) $banners as $pack ) {
@@ -604,9 +631,26 @@ function mc_app_config_clean_banners( $banners ) {
 		$variants = array();
 		foreach ( $allowed_variant as $key ) {
 			$src = isset( $pack['variants'][ $key ] ) && is_array( $pack['variants'][ $key ] ) ? $pack['variants'][ $key ] : array();
-			$variants[ $key ] = array(
-				'image_url' => ! empty( $src['image_url'] ) ? esc_url_raw( $src['image_url'] ) : null,
-			);
+
+			// The old shape carried a single image_url per variant. Read it as
+			// the app crop so a config published before the crops existed does
+			// not lose its artwork on the next publish.
+			if ( isset( $src['image_url'] ) && ! isset( $src['app'] ) ) {
+				$src['app'] = $src['image_url'];
+			}
+
+			$crops = array();
+			foreach ( $allowed_crop as $crop ) {
+				$url = isset( $src[ $crop ] ) ? mc_app_config_clean_image_url( $src[ $crop ] ) : null;
+				if ( $url ) {
+					$crops[ $crop ] = $url;
+				}
+			}
+
+			// A variant with no usable app crop is null rather than an array of
+			// nulls, so an app can test the variant itself instead of hunting
+			// through crops to discover there is nothing to draw.
+			$variants[ $key ] = empty( $crops['app'] ) ? null : $crops;
 		}
 
 		$status = isset( $pack['status'] ) ? strtolower( (string) $pack['status'] ) : 'draft';
