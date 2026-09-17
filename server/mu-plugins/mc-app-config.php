@@ -25,6 +25,19 @@ const MC_APP_CONFIG_OPTION   = 'mc_app_config';
 const MC_APP_CONFIG_MAX_BYTES = 262144; // 256 KB — a layout that exceeds this is a bug, not a layout.
 
 /**
+ * How far above the recorded build a self-reporting app may push latest_build
+ * in one step.
+ *
+ * The app-config route is public, so this is the only thing stopping someone
+ * curling a header at it and claiming build 99999 — which would leave every
+ * real app permanently offering an update to something that does not exist.
+ * Builds go up by one at a time, so this is already far more slack than a real
+ * release needs. min_build is never touched by a report, so even a successful
+ * lie cannot lock anybody out of the app.
+ */
+const MC_APP_CONFIG_MAX_BUILD_JUMP = 25;
+
+/**
  * Shared hosting on Apache/CGI strips the Authorization header before PHP sees
  * it, which makes Application Passwords fail with a confusing "not logged in"
  * error. Restore it here — mu-plugins load before authentication is determined.
@@ -196,6 +209,11 @@ function mc_app_config_default_releases() {
 }
 
 function mc_app_config_get( WP_REST_Request $request ) {
+	// Every launch of every app hits this route and each request carries the
+	// build it came from, so the console can show the real number without
+	// anyone typing it and without the pipeline holding a token.
+	mc_app_config_note_calling_build( $request );
+
 	$config = get_option( MC_APP_CONFIG_OPTION );
 	if ( ! is_array( $config ) ) {
 		$config = mc_app_config_default();
@@ -299,6 +317,86 @@ function mc_app_config_post( WP_REST_Request $request ) {
 }
 
 /**
+ * Notices the build number an app sent with its config request.
+ *
+ *   X-MC-App-Platform: ios
+ *   X-MC-App-Build: 23
+ *   X-MC-App-Version: 1.1.0
+ *
+ * Absent or unparseable headers mean this does nothing at all, which is the
+ * case for the console, curl, and every older build of both apps.
+ */
+function mc_app_config_note_calling_build( WP_REST_Request $request ) {
+	$platform = sanitize_key( (string) $request->get_header( 'x_mc_app_platform' ) );
+	if ( ! in_array( $platform, array( 'ios', 'android' ), true ) ) {
+		return;
+	}
+
+	$build = (int) $request->get_header( 'x_mc_app_build' );
+	if ( $build <= 0 ) {
+		return;
+	}
+
+	mc_app_config_record_build(
+		$platform,
+		$build,
+		(string) $request->get_header( 'x_mc_app_version' ),
+		'app',
+		MC_APP_CONFIG_MAX_BUILD_JUMP
+	);
+}
+
+/**
+ * Writes a build number into a platform's release block.
+ *
+ * Shared by the pipeline route and by apps reporting themselves so the two
+ * paths cannot drift apart. Returns the resulting latest_build.
+ *
+ * It never lowers the number: a re-run of an old commit, or a tester still on
+ * last week's build, must not make everyone else think the newest build went
+ * away. That also means the common case — an app reporting the build already
+ * on record — writes nothing, so the hot path stays a plain read.
+ *
+ * $max_jump of 0 means no ceiling, which is right for the authenticated
+ * pipeline; an untrusted caller passes a real limit.
+ */
+function mc_app_config_record_build( $platform, $build, $version_name = '', $source = 'pipeline', $max_jump = 0 ) {
+	$existing = get_option( MC_APP_CONFIG_OPTION );
+	$config   = is_array( $existing ) ? $existing : mc_app_config_default();
+	if ( empty( $config['app'] ) || ! is_array( $config['app'] ) ) {
+		$config['app'] = mc_app_config_default_releases();
+	}
+
+	$rel     = $config['app'][ $platform ];
+	$current = (int) ( isset( $rel['latest_build'] ) ? $rel['latest_build'] : 0 );
+
+	if ( $build <= $current ) {
+		return $current;
+	}
+	if ( $max_jump > 0 && $build > $current + $max_jump ) {
+		return $current;
+	}
+
+	$rel['latest_build'] = $build;
+	if ( '' !== trim( (string) $version_name ) ) {
+		$rel['version_name'] = sanitize_text_field( $version_name );
+	}
+	$rel['reported_at']   = current_time( 'c', true );
+	$rel['reported_from'] = sanitize_key( $source );
+
+	$config['app'][ $platform ] = $rel;
+	$config['version']    = (int) ( isset( $config['version'] ) ? $config['version'] : 0 ) + 1;
+	$config['updated_at'] = current_time( 'c', true );
+
+	$user = wp_get_current_user();
+	$config['updated_by'] = $user && $user->user_login ? $user->user_login : sanitize_key( $source );
+
+	update_option( MC_APP_CONFIG_OPTION, $config, true );
+
+	return $build;
+}
+
+/**
  * POST /mc/v1/releases/report — called by the build pipeline.
  *
  *   { "platform": "ios", "build": 23, "version_name": "1.1.0", "source": "codemagic" }
@@ -324,44 +422,26 @@ function mc_app_config_report_release( WP_REST_Request $request ) {
 		return new WP_Error( 'mc_bad_build', 'build must be a positive integer.', array( 'status' => 422 ) );
 	}
 
-	$existing = get_option( MC_APP_CONFIG_OPTION );
-	$config   = is_array( $existing ) ? $existing : mc_app_config_default();
-	if ( empty( $config['app'] ) || ! is_array( $config['app'] ) ) {
-		$config['app'] = mc_app_config_default_releases();
-	}
-	$rel = $config['app'][ $platform ];
+	// The pipeline is authenticated and is stating a fact about an upload that
+	// already happened, so no ceiling applies to it.
+	$latest = mc_app_config_record_build(
+		$platform,
+		$build,
+		isset( $in['version_name'] ) ? $in['version_name'] : '',
+		! empty( $in['source'] ) ? $in['source'] : 'pipeline',
+		0
+	);
 
-	$current = (int) ( isset( $rel['latest_build'] ) ? $rel['latest_build'] : 0 );
-	if ( $build < $current ) {
-		return new WP_REST_Response( array(
-			'ok'           => true,
-			'ignored'      => true,
-			'reason'       => sprintf( 'Build %d is older than the recorded latest build %d.', $build, $current ),
-			'latest_build' => $current,
-		), 200 );
-	}
-
-	$rel['latest_build']  = $build;
-	if ( ! empty( $in['version_name'] ) ) {
-		$rel['version_name'] = sanitize_text_field( $in['version_name'] );
-	}
-	$rel['reported_at']   = current_time( 'c', true );
-	$rel['reported_from'] = ! empty( $in['source'] ) ? sanitize_key( $in['source'] ) : 'pipeline';
-
-	$user                  = wp_get_current_user();
-	$config['app'][ $platform ] = $rel;
-	$config['version']     = (int) ( isset( $config['version'] ) ? $config['version'] : 0 ) + 1;
-	$config['updated_at']  = current_time( 'c', true );
-	$config['updated_by']  = $user->user_login ? $user->user_login : 'pipeline';
-
-	update_option( MC_APP_CONFIG_OPTION, $config, true );
+	$config = get_option( MC_APP_CONFIG_OPTION );
+	$rel    = isset( $config['app'][ $platform ] ) ? $config['app'][ $platform ] : array();
 
 	return new WP_REST_Response( array(
 		'ok'           => true,
+		'ignored'      => $latest !== $build,
 		'platform'     => $platform,
-		'latest_build' => $build,
-		'version_name' => $rel['version_name'],
-		'version'      => $config['version'],
+		'latest_build' => $latest,
+		'version_name' => isset( $rel['version_name'] ) ? $rel['version_name'] : '',
+		'version'      => isset( $config['version'] ) ? (int) $config['version'] : 0,
 	), 200 );
 }
 
