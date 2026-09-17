@@ -1,0 +1,90 @@
+name: Deploy
+
+# Makes this repository the source of truth for what is actually running.
+#
+#   src/  ->  built with Vite and uploaded to ros.meltingcheeseez.com
+#   server/mu-plugins/  ->  uploaded to dev2.meltingcheese.food
+#
+# Anything edited straight on the server will be overwritten by the next push,
+# which is the point: there is one place to change things, and it is here.
+
+on:
+  push:
+    branches: [main]
+    # A README tweak should not redeploy a live console.
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'index.html'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'vite.config.js'
+      - 'server/mu-plugins/**'
+      - '.github/workflows/deploy.yml'
+  # Lets you redeploy the current main by hand from the Actions tab without
+  # having to invent a commit.
+  workflow_dispatch:
+
+# Two deploys writing to the same FTP account at once would interleave files,
+# so later pushes queue behind the running one rather than racing it.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  console:
+    name: ROS console -> ros.meltingcheeseez.com
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        # --base=./ keeps the asset URLs relative, which is what the live
+        # index.html has always used.
+        run: npx vite build --base=./
+
+      - name: Upload to ros.meltingcheeseez.com
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_HOST }}
+          username: ${{ secrets.FTP_USER }}
+          password: ${{ secrets.FTP_PASS }}
+          protocol: ftps
+          local-dir: ./dist/
+          server-dir: ${{ secrets.FTP_ROS_DIR }}
+          # Old hashed bundles are harmless and a browser mid-load may still
+          # want one, so nothing is swept away here.
+          dangerous-clean-slate: false
+
+  plugins:
+    name: mu-plugins -> dev2.meltingcheese.food
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Syntax-check every plugin
+        # A PHP parse error in an mu-plugin takes the whole site down, including
+        # the endpoints both apps depend on. Cheaper to catch it here.
+        run: |
+          for f in server/mu-plugins/*.php; do
+            php -l "$f"
+          done
+
+      - name: Upload to dev2.meltingcheese.food
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_HOST }}
+          username: ${{ secrets.FTP_USER }}
+          password: ${{ secrets.FTP_PASS }}
+          protocol: ftps
+          local-dir: ./server/mu-plugins/
+          server-dir: ${{ secrets.FTP_PLUGINS_DIR }}
+          dangerous-clean-slate: false
