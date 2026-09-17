@@ -267,7 +267,37 @@ export const VARIANTS = [
   { id: 'image', label: 'Image only', note: 'Flexible responsive crop / overlay use' },
 ]
 
-export const RENDITIONS = ['app-carousel 1200×600', 'mobile-portrait 1080×1350', 'tablet 1600×900', 'desktop-wide 1920×720']
+/* The four crops a pack can carry.
+
+   These are genuinely different shapes, not four sizes of one picture — 2:1,
+   4:5 portrait, 16:9 and 8:3 — so the server cannot derive them from a single
+   upload without cropping the subject out of frame. Each one is art directed.
+
+   Only `app` is required. Every other rendition falls back to it until
+   somebody uploads a sharper crop, so a pack works from one file and is
+   perfect from four, and nothing has to wait for a full set. */
+export const RENDITIONS = [
+  { id: 'app', label: 'App carousel', size: '1200×600', ratio: 2 / 1, required: true },
+  { id: 'portrait', label: 'Mobile portrait', size: '1080×1350', ratio: 4 / 5, required: false },
+  { id: 'tablet', label: 'Tablet', size: '1600×900', ratio: 16 / 9, required: false },
+  { id: 'desktop', label: 'Desktop wide', size: '1920×720', ratio: 8 / 3, required: false },
+]
+
+/* Where a pack's artwork lives on the pack object:
+     pack.art = { cta: { app, portrait, tablet, desktop }, plain: {…}, image: {…} }
+   Missing keys are normal — see the fallback rule above. */
+export function packArt(pack, variant, rendition) {
+  const set = pack && pack.art && pack.art[variant]
+  if (!set) return null
+  return set[rendition] || set.app || null
+}
+
+/* A pack is only "complete" once every variant can actually be drawn, which
+   means each one has at least its app crop. Counting uploaded files instead
+   would call a pack complete when one variant is still empty. */
+export function packComplete(pack) {
+  return VARIANTS.every(v => !!packArt(pack, v.id, 'app'))
+}
 
 export const DEFAULT_BANNER_PACKS = [
   { id: 'bold-flavor', name: 'Bold Flavor. Big Energy.', purpose: 'Always-on brand hero', headline: 'BOLD FLAVOR. BIG ENERGY.', cta: 'View the menu', deepLink: 'app://menu?event=current', audience: 'All app users', status: 'live', placement: 'header', complete: true },
@@ -467,11 +497,16 @@ export function buildAppConfig(layouts, packs, events, defaultEventId, releases)
       deep_link: p.deepLink,
       audience: p.audience,
       status: p.status,
-      variants: {
-        cta: { image_url: p.imageCta || null },
-        plain: { image_url: p.imagePlain || null },
-        image: { image_url: p.imageOnly || null },
-      },
+      // Every rendition is resolved here rather than in the apps, so each
+      // one arrives as a finished URL and neither app has to know the
+      // fallback rule. An empty variant is sent as null so a half-finished
+      // pack cannot publish a broken image tag.
+      variants: Object.fromEntries(VARIANTS.map(v => [
+        v.id,
+        packArt(p, v.id, 'app')
+          ? Object.fromEntries(RENDITIONS.map(r => [r.id, packArt(p, v.id, r.id)]))
+          : null,
+      ])),
     })),
   }
 }
