@@ -70,12 +70,12 @@ export default function Banners() {
                   </td>
                   <td>{b.platform}</td>
                   <td style={{ maxWidth: 130 }}>{b.where}</td>
-                  <td><span className={'pill ' + (b.status === 'Active' ? 'green' : 'orange')}>{b.status}</span></td>
+                  <td><span className={`pill ${b.status === 'Active' ? 'green' : 'orange'}`}>{b.status}</span></td>
                   <td style={muted}>{b.start}<br />{b.end}</td>
                   <td>{b.imp}</td><td>{b.clicks}</td><td><b>{b.ctr}</b></td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <button title="Edit" onClick={() => nav('/promotions/banners/edit')}>✏️</button>
-                    <button title="Duplicate">⟉</button>
+                    <button title="Duplicate">⧉</button>
                     <button title="Delete" style={{ color: 'var(--red)' }}>🗑</button>
                   </td>
                 </tr>

@@ -1,16 +1,48 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { fetchOrders, hasApiToken } from '../lib/connectors.js'
+
+/* How often the sidebar re-counts waiting orders. Matches the Live Orders
+   screen so the badge and the list never disagree for long. */
+const BADGE_REFRESH_MS = 20_000
+
+/* Orders the kitchen has not started yet - the number an operator wants
+   to see from any screen. The badge is that count, live from the store,
+   rather than a figure typed into the nav. It stays hidden with no token
+   (nothing to count) and at zero (nothing waiting). */
+function useWaitingOrderCount() {
+  const [count, setCount] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    const tick = async () => {
+      if (!hasApiToken()) { if (!cancelled) setCount(0); return }
+      const res = await fetchOrders({ status: 'on-hold', perPage: 100 })
+      // A failed poll keeps the last good number instead of blanking the
+      // badge every time the connection blips.
+      if (!cancelled && res.ok) setCount(res.orders.length)
+    }
+    tick()
+    const timer = setInterval(tick, BADGE_REFRESH_MS)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [])
+  return count
+}
 
 /* Nav per the refined Figma frames (132-403 / 132-812): Menu Management is a
    group holding menu + banner tooling; Coupons and Finance join the tree. */
 const NAV = [
   { to: '/dashboard', label: 'Dashboard', icon: '▦' },
-  { to: '/live-orders', label: 'Live Orders', icon: '🛎', badge: '12' },
+  { to: '/live-orders', label: 'Live Orders', icon: '🛎', badge: 'waiting' },
   { to: '/locations', label: 'Locations', icon: '📍' },
+  { label: 'CONTENT & APP', heading: true },
+  { to: '/content/home-builder', label: 'Home Builder', icon: '▤' },
+  { to: '/content/banners', label: 'Banner Library', icon: '▩' },
+  { to: '/content/releases', label: 'App Releases', icon: '⇪' },
   { label: 'MENU MANAGEMENT', heading: true },
   { to: '/menu', label: 'Categories', icon: '🗂' },
   { to: '/menu/items', label: 'Items', icon: '🍛' },
   { to: '/menu/modifiers', label: 'Modifiers', icon: '🎚' },
+  { to: '/menu/product-editor', label: 'Product Editor', icon: '✎' },
   { to: '/promotions/banner-groups', label: 'Banner Groups', icon: '🗃' },
   { label: 'OPERATIONS', heading: true },
   { to: '/inventory', label: 'Inventory', icon: '📦' },
@@ -44,6 +76,14 @@ export default function Shell() {
   const t = today()
   const [open, setOpen] = useState(false)
   const [userMenu, setUserMenu] = useState(false)
+  const waiting = useWaitingOrderCount()
+
+  /* The only live badge today is the waiting-orders count; a nav entry
+     names which figure it wants and this resolves it. Null hides the pill. */
+  const badgeFor = item => {
+    if (item.badge === 'waiting') return waiting > 0 ? String(waiting) : null
+    return item.badge || null
+  }
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh' }}>
@@ -76,10 +116,10 @@ export default function Shell() {
             })}>
               <span style={{ width: 18, textAlign: 'center', fontSize: 13 }}>{item.icon}</span>
               <span style={{ flex: 1 }}>{item.label}</span>
-              {item.badge && <span style={{
+              {badgeFor(item) && <span style={{
                 background: 'var(--red)', color: '#fff', borderRadius: 9,
                 fontSize: 9.5, fontWeight: 700, padding: '1px 6px',
-              }}>{item.badge}</span>}
+              }}>{badgeFor(item)}</span>}
             </NavLink>
           ))}
         </nav>
