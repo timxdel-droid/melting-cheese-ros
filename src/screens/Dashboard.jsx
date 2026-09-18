@@ -625,56 +625,58 @@ export default function Dashboard() {
             ))}
           </div>
         </div>
-
-        {/* Trend, mix, service and best sellers — all computed from the orders
-            already loaded above. These replaced a set of mocked engagement and
-            review tiles: every figure in those needed a CRM, a social account
-            or a reviews platform that nothing here is connected to, and a
-            made-up number on an operations dashboard is worse than a gap. */}
-        <div style={{ display: 'grid', gap: 14 }}>
-          <TrendPanel
-            orders={orders}
-            days={days}
-            setDays={setDays}
-            onPickDay={() => nav('/live-orders')}
-          />
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <MixPanel
-              title="Where orders come from"
-              note={'(last ' + days + ' days)'}
-              empty="No orders in this range yet."
-              rows={tally(windowed.filter(countsToward), o => sourceOf(o.platform)[0])
-                .map(([label, value], i) => ({
-                  label, value,
-                  tint: ['var(--mc-orange)', 'var(--blue, #3B82F6)', 'var(--green)', 'var(--ink-3)'][i % 4],
-                }))}
-            />
-            <MixPanel
-              title="How they paid"
-              note={'(last ' + days + ' days)'}
-              empty="No payment methods recorded yet."
-              rows={tally(windowed.filter(countsToward), o => {
-                const b = payBucket(o.payment_method)
-                return b ? ({ cash: 'Cash at the window', pos: 'Card machine', online: 'Paid online' })[b] : null
-              }).map(([label, value], i) => ({
-                label, value,
-                tint: ['var(--green)', 'var(--mc-orange)', 'var(--blue, #3B82F6)'][i % 3],
-              }))}
-            />
-          </div>
-
-          <ServicePanel orders={windowed} />
-          <TopItemsPanel orders={windowed} onOpen={() => nav('/menu/items')} />
-
-          {orders.length >= 100 && (
-            <div style={{ ...muted, textAlign: 'right' }}>
-              Based on the 100 most recent orders, which is as far back as the
-              orders endpoint reaches in one call.
-            </div>
-          )}
-        </div>
       </div>
+
+      <InsightStrip orders={orders} windowed={windowed} days={days} setDays={setDays} nav={nav} />
+    </div>
+  )
+}
+
+/* Full-width strip below the three columns.
+
+   These were briefly inside the right-hand column, which is about 300px —
+   a sparkline and four stat tiles squeezed into that are unreadable, and
+   the labels wrapped to three lines. They need the whole width. */
+function InsightStrip({ orders, windowed, days, setDays, nav }) {
+  return (
+    <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr', gap: 14, alignItems: 'start' }}>
+        <TrendPanel orders={orders} days={days} setDays={setDays} onPickDay={() => nav('/live-orders')} />
+        <MixPanel
+          title="Where orders come from"
+          note={'(' + days + 'd)'}
+          empty="No orders in this range yet."
+          rows={tally(windowed.filter(countsToward), o => sourceOf(o.platform)[0])
+            .map(([label, value], i) => ({
+              label, value,
+              tint: ['var(--mc-orange)', '#3B82F6', 'var(--green)', 'var(--ink-3)'][i % 4],
+            }))}
+        />
+        <MixPanel
+          title="How they paid"
+          note={'(' + days + 'd)'}
+          empty="No payment methods recorded yet."
+          rows={tally(windowed.filter(countsToward), o => {
+            const b = payBucket(o.payment_method)
+            return b ? ({ cash: 'Cash at the window', pos: 'Card machine', online: 'Paid online' })[b] : null
+          }).map(([label, value], i) => ({
+            label, value,
+            tint: ['var(--green)', 'var(--mc-orange)', '#3B82F6'][i % 3],
+          }))}
+        />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 14, alignItems: 'start' }}>
+        <ServicePanel orders={windowed} />
+        <TopItemsPanel orders={windowed} onOpen={() => nav('/menu/items')} />
+      </div>
+
+      {orders.length >= 100 && (
+        <div style={{ ...muted, textAlign: 'right' }}>
+          Based on the 100 most recent orders, which is as far back as the
+          orders endpoint reaches in one call.
+        </div>
+      )}
     </div>
   )
 }
