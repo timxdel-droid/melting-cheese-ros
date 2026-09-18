@@ -146,6 +146,55 @@ function topItems(orders, limit = 6) {
   return [...map.values()].sort((a, b) => b.qty - a.qty).slice(0, limit)
 }
 
+/* Catalogue lines that sold nothing at all in the window.
+
+   The other half of "what is popular". A best-seller list only ever shows
+   winners, so a dish that nobody has ordered for a fortnight stays invisible
+   while it goes on taking up space on the truck and in the prep list.
+
+   Counted by name, matching the way sold quantities are matched elsewhere,
+   because the order payload carries names rather than ids. */
+function neverSold(orders, catalogue) {
+  if (!catalogue.length) return []
+  const sold = new Set()
+  for (const o of orders) {
+    if (o.status === 'cancelled') continue
+    for (const line of o.items || []) {
+      const name = String(line.name || '').trim()
+      if (name && (Number(line.quantity) || 0) > 0) sold.add(name)
+    }
+  }
+  return catalogue.filter(i => !sold.has(i.name))
+}
+
+/* Whether an item is selling more or less than it was.
+
+   Splits the window down the middle and compares the halves. Deliberately
+   coarse: with the order volumes here anything cleverer would be reading
+   tea leaves, and a direction is all a stocking decision needs. Returns
+   null when either half is too thin to say anything honest. */
+function itemDirection(orders, name, days) {
+  const half = Math.floor(days / 2)
+  if (half < 1) return null
+  const cut = new Date(Date.now() - half * 86_400_000).toLocaleDateString('en-CA', { timeZone: TZ })
+  let earlier = 0, later = 0
+  for (const o of orders) {
+    if (o.status === 'cancelled') continue
+    const day = dayOf(o.placed_at)
+    if (!day) continue
+    for (const line of o.items || []) {
+      if (String(line.name || '').trim() !== name) continue
+      const qty = Number(line.quantity) || 0
+      if (day < cut) earlier += qty
+      else later += qty
+    }
+  }
+  if (earlier + later < 3) return null
+  if (later > earlier) return 'up'
+  if (later < earlier) return 'down'
+  return 'flat'
+}
+
 /* Median, not mean: one order that sat forgotten for an hour should not
    make a good service average look bad. */
 function medianPrepMinutes(orders) {
@@ -242,6 +291,11 @@ export default function Dashboard() {
      someone standing in a truck needs; the widgets are for reading the week. */
   const [days, setDays] = useState(14)
   const windowed = useMemo(() => inWindow(orders, days), [orders, days])
+
+  /* The menu as last synced, used to work out which lines sold nothing.
+     Without it the panel can only ever show winners, because an item that
+     never appears in an order never appears in the order data either. */
+  const catalogueItems = useMemo(() => (sync && sync.items) || [], [sync])
 
   const eventName = id => (events.find(e => e.id === id) || {}).name || (id ? id : 'No event')
   const truckFor = eventId => trucks.find(t => t.deployments && t.deployments[eventId] && t.deployments[eventId].date)
@@ -627,7 +681,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      <InsightStrip orders={orders} windowed={windowed} days={days} setDays={setDays} nav={nav} />
+      <InsightStrip orders={orders} windowed={windowed} days={days} setDays={setDays} nav={nav} catalogue={catalogueItems} />
     </div>
   )
 }
@@ -637,7 +691,7 @@ export default function Dashboard() {
    These were briefly inside the right-hand column, which is about 300px —
    a sparkline and four stat tiles squeezed into that are unreadable, and
    the labels wrapped to three lines. They need the whole width. */
-function InsightStrip({ orders, windowed, days, setDays, nav }) {
+function InsightStrip({ orders, windowed, days, setDays, nav, catalogue }) {
   return (
     <div style={{ display: 'grid', gap: 14, marginTop: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr 1fr', gap: 14, alignItems: 'start' }}>
@@ -668,7 +722,7 @@ function InsightStrip({ orders, windowed, days, setDays, nav }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.6fr 1fr', gap: 14, alignItems: 'start' }}>
         <ServicePanel orders={windowed} />
-        <TopItemsPanel orders={windowed} onOpen={() => nav('/menu/items')} />
+        <TopItemsPanel orders={windowed} catalogue={catalogue} days={days} onOpen={() => nav('/menu/items')} />
       </div>
 
       {orders.length >= 100 && (
@@ -823,14 +877,17 @@ function ServicePanel({ orders }) {
 
 /* Best sellers. Quantity drives the bar because that is what runs the
    kitchen out of stock; revenue sits beside it for the commercial read. */
-function TopItemsPanel({ orders, onOpen }) {
+function TopItemsPanel({ orders, catalogue, days, onOpen }) {
   const rows = useMemo(() => topItems(orders), [orders])
+  const quiet = useMemo(() => neverSold(orders, catalogue), [orders, catalogue])
   const peak = Math.max(1, ...rows.map(r => r.qty))
+
+  const ARROW = { up: ['▲', 'var(--green)'], down: ['▼', 'var(--red)'], flat: ['', ''] }
 
   return (
     <div className="card" style={card}>
       <div style={{ display: 'flex', alignItems: 'baseline' }}>
-        <h3 style={{ ...h3, margin: 0, flex: 1 }}>Top items <span style={muted}>(selected range)</span></h3>
+        <h3 style={{ ...h3, margin: 0, flex: 1 }}>What is selling <span style={muted}>(last {days} days)</span></h3>
         {onOpen && (
           <button onClick={onOpen} style={{
             border: 'none', background: 'none', color: 'var(--mc-orange-deep)',
@@ -838,19 +895,53 @@ function TopItemsPanel({ orders, onOpen }) {
           }}>Open Items →</button>
         )}
       </div>
+
       {!rows.length && <div style={{ ...muted, paddingTop: 8 }}>No items sold in this range yet.</div>}
-      {rows.map(r => (
-        <div key={r.name} style={{ marginTop: 9 }}>
-          <div style={{ display: 'flex', fontSize: 11.5, marginBottom: 3 }}>
-            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
-            <b style={{ marginLeft: 8 }}>{r.qty}</b>
-            <span style={{ ...muted, marginLeft: 8 }}>{aed(r.revenue)}</span>
+      {rows.map(r => {
+        const dir = itemDirection(orders, r.name, days)
+        const [glyph, tint] = ARROW[dir] || ['', '']
+        return (
+          <div key={r.name} style={{ marginTop: 9 }}>
+            <div style={{ display: 'flex', fontSize: 11.5, marginBottom: 3 }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+              {glyph && (
+                <span title={dir === 'up' ? 'Selling more than earlier in this range' : 'Selling less than earlier in this range'}
+                  style={{ color: tint, fontSize: 9, marginLeft: 6 }}>{glyph}</span>
+              )}
+              <b style={{ marginLeft: 8 }}>{r.qty}</b>
+              <span style={{ ...muted, marginLeft: 8 }}>{aed(r.revenue)}</span>
+            </div>
+            <div style={{ height: 6, background: 'var(--line)', borderRadius: 3, overflow: 'hidden' }}>
+              <div style={{ width: (r.qty / peak) * 100 + '%', height: '100%', background: 'var(--mc-orange)' }} />
+            </div>
           </div>
-          <div style={{ height: 6, background: 'var(--line)', borderRadius: 3, overflow: 'hidden' }}>
-            <div style={{ width: (r.qty / peak) * 100 + '%', height: '100%', background: 'var(--mc-orange)' }} />
+        )
+      })}
+
+      {/* The other half of the question. A best-seller list only shows
+          winners, so a dish nobody has ordered in a fortnight stays invisible
+          while it goes on taking space on the truck and in the prep list. */}
+      {!!quiet.length && (
+        <div style={{ marginTop: 14, paddingTop: 11, borderTop: '1px solid var(--line)' }}>
+          <div style={{ ...muted, marginBottom: 6 }}>
+            Nothing sold in {days} days · {quiet.length} of {catalogue.length} items
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+            {quiet.slice(0, 14).map(i => (
+              <span key={i.id + '|' + i.name} className="pill gray"
+                style={{ fontSize: 10, maxWidth: 150, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {i.name}
+              </span>
+            ))}
+            {quiet.length > 14 && <span style={{ ...muted, alignSelf: 'center' }}>+{quiet.length - 14} more</span>}
           </div>
         </div>
-      ))}
+      )}
+      {!quiet.length && !!catalogue.length && !!rows.length && (
+        <div style={{ ...muted, marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--line)', color: 'var(--green)' }}>
+          Every item on the menu sold at least once in this range.
+        </div>
+      )}
     </div>
   )
 }
