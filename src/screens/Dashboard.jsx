@@ -10,12 +10,20 @@ import {
    LIVE - read from the store and the published setup:
      Orders Today, Revenue Today, Avg. Prep Time, Pending Orders,
      Active Locations, Live Orders Overview, Location Status,
-     Inventory Overview, Payments Summary.
+     Inventory Overview, Payments Summary, and the widgets at the foot of
+     the page - Orders & Revenue trend, order source mix, payment mix,
+     Service, Top items.
 
    DEMO - no data source exists for these yet, so the figures are the
    design mock-ups and are labelled as such in the code:
-     Kitchen Screens, WiFi Customers, CCTV Feed, Customers & Engagement,
-     Social & Reviews, Sales via Partners & Vouchers.
+     Kitchen Screens, WiFi Customers, CCTV Feed.
+
+   Customers & Engagement, Social & Reviews and Sales via Partners were
+   removed rather than left as mock-ups. Every figure in them needed a CRM,
+   a social account or a reviews platform that nothing here connects to, and
+   new-vs-repeat needs a stable customer identifier the orders do not carry.
+   A number that looks live but is not is worse on an operations screen than
+   an honest gap, because someone eventually makes a decision on it.
 
    "Today" is the Dubai calendar day, matching the clock in the header.
    Orders come from mc/v1/orders, which only ever lists orders placed in the
@@ -85,6 +93,103 @@ const STATUS_PILL = {
 const countsToward = o => o.status !== 'cancelled'
 const itemCount = o => (o.items || []).reduce((n, i) => n + (Number(i.quantity) || 0), 0)
 
+/* ---------------- aggregates over a window of days ----------------
+
+   Everything below is computed from the orders already on screen. No
+   metric here is invented: if the orders do not contain it, the widget
+   does not claim it. That is why there is no "new vs repeat customers"
+   yet — the payload carries no stable way to tell two people apart. */
+
+/* Oldest-to-newest list of the last `days` Dubai days, each with its
+   totals. Days with no trading stay in the series as zeroes so the shape
+   of a quiet week is visible rather than compressed away. */
+function daySeries(orders, days) {
+  const keys = []
+  for (let i = days - 1; i >= 0; i--) {
+    keys.push(new Date(Date.now() - i * 86_400_000).toLocaleDateString('en-CA', { timeZone: TZ }))
+  }
+  const byDay = new Map(keys.map(k => [k, { key: k, orders: 0, revenue: 0, cancelled: 0, items: 0 }]))
+  for (const o of orders) {
+    const bucket = byDay.get(dayOf(o.placed_at))
+    if (!bucket) continue
+    if (o.status === 'cancelled') { bucket.cancelled++; continue }
+    bucket.orders++
+    bucket.revenue += Number(o.total) || 0
+    bucket.items += itemCount(o)
+  }
+  return keys.map(k => byDay.get(k))
+}
+
+const inWindow = (orders, days) => {
+  const first = new Date(Date.now() - (days - 1) * 86_400_000).toLocaleDateString('en-CA', { timeZone: TZ })
+  return orders.filter(o => {
+    const d = dayOf(o.placed_at)
+    return d && d >= first
+  })
+}
+
+/* Best sellers by quantity. Lines are grouped by name rather than product
+   id because the same dish can arrive under different ids once it has been
+   re-created in WooCommerce, and the kitchen thinks in names. */
+function topItems(orders, limit = 6) {
+  const map = new Map()
+  for (const o of orders) {
+    if (o.status === 'cancelled') continue
+    for (const line of o.items || []) {
+      const name = String(line.name || '').trim() || 'Unnamed item'
+      const row = map.get(name) || { name, qty: 0, revenue: 0 }
+      row.qty += Number(line.quantity) || 0
+      row.revenue += Number(line.total) || 0
+      map.set(name, row)
+    }
+  }
+  return [...map.values()].sort((a, b) => b.qty - a.qty).slice(0, limit)
+}
+
+/* Median, not mean: one order that sat forgotten for an hour should not
+   make a good service average look bad. */
+function medianPrepMinutes(orders) {
+  const mins = orders
+    .filter(o => o.status === 'completed' && o.placed_at && o.completed_at)
+    .map(o => (new Date(o.completed_at) - new Date(o.placed_at)) / 60_000)
+    .filter(m => m >= 0 && Number.isFinite(m))
+    .sort((a, b) => a - b)
+  if (!mins.length) return null
+  const mid = Math.floor(mins.length / 2)
+  return mins.length % 2 ? mins[mid] : (mins[mid - 1] + mins[mid]) / 2
+}
+
+function busiestHour(orders) {
+  const hours = new Array(24).fill(0)
+  for (const o of orders) {
+    if (!o.placed_at || o.status === 'cancelled') continue
+    const h = Number(new Date(o.placed_at).toLocaleString('en-GB', { timeZone: TZ, hour: '2-digit', hour12: false }))
+    if (Number.isFinite(h)) hours[h]++
+  }
+  const peak = hours.indexOf(Math.max(...hours))
+  if (!hours[peak]) return null
+  const label = n => String(n).padStart(2, '0') + ':00'
+  return { label: label(peak) + '–' + label((peak + 1) % 24), count: hours[peak] }
+}
+
+/* Share of orders that added at least one paid extra. Extras are fee lines,
+   so an order with no fees simply did not take one. */
+function attachRate(orders) {
+  const live = orders.filter(countsToward)
+  if (!live.length) return null
+  return live.filter(o => (o.fees || []).length > 0).length / live.length
+}
+
+function tally(orders, fn) {
+  const out = new Map()
+  for (const o of orders) {
+    const key = fn(o)
+    if (key == null) continue
+    out.set(key, (out.get(key) || 0) + 1)
+  }
+  return [...out.entries()].sort((a, b) => b[1] - a[1])
+}
+
 /* ---------------- data ---------------- */
 
 function useOrders() {
@@ -131,6 +236,12 @@ export default function Dashboard() {
   const trucks = useMemo(loadTrucks, [])
   const sync = useMemo(loadSyncedProducts, [])
   const [locFilter, setLocFilter] = useState('')
+
+  /* Range for the trend, mix, service and top-item widgets at the bottom of
+     the page. The KPI row above them is always today, because that is what
+     someone standing in a truck needs; the widgets are for reading the week. */
+  const [days, setDays] = useState(14)
+  const windowed = useMemo(() => inWindow(orders, days), [orders, days])
 
   const eventName = id => (events.find(e => e.id === id) || {}).name || (id ? id : 'No event')
   const truckFor = eventId => trucks.find(t => t.deployments && t.deployments[eventId] && t.deployments[eventId].date)
@@ -515,51 +626,229 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Engagement / social / partners — DEMO (no CRM, review or voucher source connected) */}
+        {/* Trend, mix, service and best sellers — all computed from the orders
+            already loaded above. These replaced a set of mocked engagement and
+            review tiles: every figure in those needed a CRM, a social account
+            or a reviews platform that nothing here is connected to, and a
+            made-up number on an operations dashboard is worse than a gap. */}
         <div style={{ display: 'grid', gap: 14 }}>
+          <TrendPanel
+            orders={orders}
+            days={days}
+            setDays={setDays}
+            onPickDay={() => nav('/live-orders')}
+          />
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <div className="card" style={card}>
-              <h3 style={h3}>Customers & Engagement <span style={muted}>(Today)</span></h3>
-              {[
-                ['🧑‍🤝‍🧑 New Customers', '128'], ['🔁 Repeat Customers', '286'],
-                ['💬 WhatsApp Registrations', '184'], ['✉️ Email Registrations', '96'],
-                ['🎟 Vouchers Issued (3rd Party)', '43'],
-              ].map(([l, v]) => (
-                <div key={l} style={{ display: 'flex', padding: '6px 0', fontSize: 11.5, borderTop: '1px solid var(--line)' }}>
-                  <span style={{ flex: 1 }}>{l}</span><b>{v}</b>
-                </div>
-              ))}
-            </div>
-            <div className="card" style={card}>
-              <h3 style={h3}>Social & Reviews <span style={muted}>(Today)</span></h3>
-              {[
-                ['📣 New Social Followers', '312'], ['⭐ Google Reviews', '18'],
-                ['✨ Average Rating', '4.8'], ['📝 Reviews Responded', '16'],
-              ].map(([l, v]) => (
-                <div key={l} style={{ display: 'flex', padding: '6px 0', fontSize: 11.5, borderTop: '1px solid var(--line)' }}>
-                  <span style={{ flex: 1 }}>{l}</span><b>{v}</b>
-                </div>
-              ))}
-            </div>
+            <MixPanel
+              title="Where orders come from"
+              note={'(last ' + days + ' days)'}
+              empty="No orders in this range yet."
+              rows={tally(windowed.filter(countsToward), o => sourceOf(o.platform)[0])
+                .map(([label, value], i) => ({
+                  label, value,
+                  tint: ['var(--mc-orange)', 'var(--blue, #3B82F6)', 'var(--green)', 'var(--ink-3)'][i % 4],
+                }))}
+            />
+            <MixPanel
+              title="How they paid"
+              note={'(last ' + days + ' days)'}
+              empty="No payment methods recorded yet."
+              rows={tally(windowed.filter(countsToward), o => {
+                const b = payBucket(o.payment_method)
+                return b ? ({ cash: 'Cash at the window', pos: 'Card machine', online: 'Paid online' })[b] : null
+              }).map(([label, value], i) => ({
+                label, value,
+                tint: ['var(--green)', 'var(--mc-orange)', 'var(--blue, #3B82F6)'][i % 3],
+              }))}
+            />
           </div>
-          <div className="card" style={card}>
-            <h3 style={h3}>Sales via Partners & Vouchers <span style={muted}>(Today)</span></h3>
-            <div style={{ display: 'flex', gap: 10 }}>
-              {[
-                ['🎁 Gift Vouchers Used', 'AED 2,640', '28 Orders'],
-                ['🎪 Event Organizer Sales', 'AED 5,820', '52 Orders'],
-                ['🤝 3rd Party Partner Sales', 'AED 3,450', '31 Orders'],
-              ].map(([p, v, o]) => (
-                <div key={p} style={{ flex: 1, textAlign: 'center', background: 'var(--surface-alt)', borderRadius: 9, padding: '10px 4px' }}>
-                  <div style={{ fontWeight: 800, fontSize: 12.5 }}>{v}</div>
-                  <div style={muted}>{p}</div>
-                  <div style={{ fontSize: 10, color: 'var(--ink-2)' }}>{o}</div>
-                </div>
-              ))}
+
+          <ServicePanel orders={windowed} />
+          <TopItemsPanel orders={windowed} onOpen={() => nav('/menu/items')} />
+
+          {orders.length >= 100 && (
+            <div style={{ ...muted, textAlign: 'right' }}>
+              Based on the 100 most recent orders, which is as far back as the
+              orders endpoint reaches in one call.
             </div>
-          </div>
+          )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/* ---------------- live widgets ---------------- */
+
+/* Orders and revenue per day, as bars you can point at.
+
+   Hovering reads out that day rather than relying on a tooltip library,
+   and clicking a day opens Live Orders. Height is share-of-peak, so a
+   quiet week still fills the card instead of flatlining at one pixel. */
+function TrendPanel({ orders, days, setDays, onPickDay }) {
+  const series = useMemo(() => daySeries(orders, days), [orders, days])
+  const [hover, setHover] = useState(null)
+
+  const peak = Math.max(1, ...series.map(d => d.orders))
+  const shown = hover != null ? series[hover] : null
+  const totalOrders = series.reduce((n, d) => n + d.orders, 0)
+  const totalRevenue = series.reduce((n, d) => n + d.revenue, 0)
+
+  const dayLabel = key => new Date(key + 'T12:00:00Z')
+    .toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: TZ })
+
+  return (
+    <div className="card" style={card}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <h3 style={{ ...h3, margin: 0, flex: 1 }}>
+          Orders &amp; Revenue{' '}
+          <span style={muted}>{shown ? dayLabel(shown.key) : 'last ' + days + ' days'}</span>
+        </h3>
+        {[7, 14, 30].map(d => (
+          <button key={d} onClick={() => setDays(d)} style={{
+            border: '1px solid var(--line)', background: d === days ? 'var(--mc-orange)' : '#fff',
+            color: d === days ? '#fff' : 'var(--ink-2)', borderRadius: 7, fontSize: 10.5,
+            fontWeight: 700, padding: '3px 8px', cursor: 'pointer',
+          }}>{d}d</button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 18, margin: '10px 0 12px' }}>
+        <div>
+          <div style={{ fontSize: 21, fontWeight: 800, lineHeight: 1.1 }}>
+            {shown ? shown.orders : totalOrders}
+          </div>
+          <div style={muted}>{shown ? 'orders that day' : 'orders'}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 21, fontWeight: 800, lineHeight: 1.1, color: 'var(--mc-orange-deep)' }}>
+            {aed(shown ? shown.revenue : totalRevenue)}
+          </div>
+          <div style={muted}>{shown ? 'collected' : 'total'}</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 76 }}
+        onMouseLeave={() => setHover(null)}>
+        {series.map((d, i) => (
+          <div key={d.key}
+            onMouseEnter={() => setHover(i)}
+            onClick={() => onPickDay && onPickDay(d)}
+            title={dayLabel(d.key) + ' — ' + d.orders + ' orders, ' + aed(d.revenue)}
+            style={{ flex: 1, height: '100%', display: 'flex', alignItems: 'flex-end', cursor: 'pointer' }}>
+            <div style={{
+              width: '100%',
+              height: Math.max(3, (d.orders / peak) * 100) + '%',
+              borderRadius: '3px 3px 0 0',
+              background: hover === i ? 'var(--mc-orange-deep)'
+                : d.orders ? 'var(--mc-orange)' : 'var(--line)',
+              transition: 'background .12s',
+            }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', ...muted, marginTop: 5 }}>
+        <span>{dayLabel(series[0].key)}</span>
+        <span>{dayLabel(series[series.length - 1].key)}</span>
+      </div>
+    </div>
+  )
+}
+
+/* A labelled proportion bar. Used for channel and payment mix, where the
+   question is always "how is this split" rather than "how many". */
+function MixPanel({ title, note, rows, empty }) {
+  const total = rows.reduce((n, r) => n + r.value, 0)
+  return (
+    <div className="card" style={card}>
+      <h3 style={h3}>{title} <span style={muted}>{note}</span></h3>
+      {!total && <div style={{ ...muted, padding: '8px 0' }}>{empty}</div>}
+      {!!total && rows.filter(r => r.value).map(r => (
+        <div key={r.label} style={{ marginBottom: 9 }}>
+          <div style={{ display: 'flex', fontSize: 11.5, marginBottom: 3 }}>
+            <span style={{ flex: 1 }}>{r.label}</span>
+            <b>{Math.round((r.value / total) * 100)}%</b>
+            <span style={{ ...muted, marginLeft: 6 }}>{r.value}</span>
+          </div>
+          <div style={{ height: 6, background: 'var(--line)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: (r.value / total) * 100 + '%', height: '100%', background: r.tint }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/* Four numbers that describe how service actually went, rather than how
+   much was sold. Each renders a dash when the orders cannot answer it. */
+function ServicePanel({ orders }) {
+  const live = orders.filter(countsToward)
+  const prep = medianPrepMinutes(orders)
+  const peak = busiestHour(orders)
+  const attach = attachRate(orders)
+  const revenue = live.reduce((n, o) => n + (Number(o.total) || 0), 0)
+  const aov = live.length ? revenue / live.length : null
+  const cancelled = orders.length ? orders.filter(o => o.status === 'cancelled').length / orders.length : null
+
+  const stats = [
+    ['Average order', aov == null ? '—' : aed(aov), live.length + ' orders'],
+    ['Median prep', prep == null ? '—' : Math.round(prep) + ' min', prep == null ? 'none collected yet' : 'placed to collected'],
+    ['Busiest hour', peak ? peak.label : '—', peak ? peak.count + ' orders' : 'not enough data'],
+    ['Extras attached', attach == null ? '—' : Math.round(attach * 100) + '%', 'orders with a paid extra'],
+  ]
+
+  return (
+    <div className="card" style={card}>
+      <h3 style={h3}>Service <span style={muted}>(selected range)</span></h3>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10 }}>
+        {stats.map(([label, value, sub]) => (
+          <div key={label} style={{ background: 'var(--surface-alt)', borderRadius: 9, padding: '10px 8px', textAlign: 'center' }}>
+            <div style={{ fontWeight: 800, fontSize: 15 }}>{value}</div>
+            <div style={{ ...muted, marginTop: 1 }}>{label}</div>
+            <div style={{ fontSize: 10, color: 'var(--ink-2)', marginTop: 2 }}>{sub}</div>
+          </div>
+        ))}
+      </div>
+      {cancelled != null && cancelled > 0 && (
+        <div style={{ ...muted, marginTop: 10, color: cancelled > 0.1 ? 'var(--red)' : 'var(--ink-3)' }}>
+          {Math.round(cancelled * 100)}% of orders in this range were cancelled.
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* Best sellers. Quantity drives the bar because that is what runs the
+   kitchen out of stock; revenue sits beside it for the commercial read. */
+function TopItemsPanel({ orders, onOpen }) {
+  const rows = useMemo(() => topItems(orders), [orders])
+  const peak = Math.max(1, ...rows.map(r => r.qty))
+
+  return (
+    <div className="card" style={card}>
+      <div style={{ display: 'flex', alignItems: 'baseline' }}>
+        <h3 style={{ ...h3, margin: 0, flex: 1 }}>Top items <span style={muted}>(selected range)</span></h3>
+        {onOpen && (
+          <button onClick={onOpen} style={{
+            border: 'none', background: 'none', color: 'var(--mc-orange-deep)',
+            fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0,
+          }}>Open Items →</button>
+        )}
+      </div>
+      {!rows.length && <div style={{ ...muted, paddingTop: 8 }}>No items sold in this range yet.</div>}
+      {rows.map(r => (
+        <div key={r.name} style={{ marginTop: 9 }}>
+          <div style={{ display: 'flex', fontSize: 11.5, marginBottom: 3 }}>
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</span>
+            <b style={{ marginLeft: 8 }}>{r.qty}</b>
+            <span style={{ ...muted, marginLeft: 8 }}>{aed(r.revenue)}</span>
+          </div>
+          <div style={{ height: 6, background: 'var(--line)', borderRadius: 3, overflow: 'hidden' }}>
+            <div style={{ width: (r.qty / peak) * 100 + '%', height: '100%', background: 'var(--mc-orange)' }} />
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
