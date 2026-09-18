@@ -153,6 +153,63 @@ function mc_orders_rate_limited() {
  * ---------------------------------------------------------------------- */
 
 /**
+ * Tidies a phone number, or returns '' when it is not usable.
+ *
+ * Kept deliberately permissive. The number exists so somebody can ring or
+ * text a customer whose food is ready, and being strict about formatting
+ * would reject real numbers written in ways people actually write them —
+ * "050 123 4567", "+971 50 123 4567", "(050) 123-4567" all mean the same.
+ *
+ * So: strip everything that is not a digit, keep a leading + if one was
+ * there, then sanity-check the length against the E.164 range of 7 to 15
+ * digits. That rejects "12" and a pasted paragraph without pretending to
+ * know which numbering plans are valid in every country we might trade in.
+ */
+function mc_orders_clean_phone( $raw ) {
+	$raw = trim( (string) $raw );
+	if ( '' === $raw ) {
+		return '';
+	}
+
+	/* Arabic-Indic and Persian numerals first. We trade in the UAE, so a
+	   customer on an Arabic keyboard typing ٠٥٠١٢٣٤٥٦٧ is ordinary, not an
+	   edge case — and because the strip below works on bytes, every one of
+	   those digits would otherwise be discarded and the order refused for
+	   having no number at all. */
+	$raw = strtr( $raw, array(
+		'٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4',
+		'٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
+		'۰' => '0', '۱' => '1', '۲' => '2', '۳' => '3', '۴' => '4',
+		'۵' => '5', '۶' => '6', '۷' => '7', '۸' => '8', '۹' => '9',
+	) );
+
+	$plus   = ( 0 === strpos( $raw, '+' ) );
+	$digits = preg_replace( '/\D+/', '', $raw );
+	$len    = strlen( $digits );
+
+	if ( $len < 7 || $len > 15 ) {
+		return '';
+	}
+
+	return ( $plus ? '+' : '' ) . $digits;
+}
+
+/**
+ * Whether the app that sent this order says it collects a phone number.
+ *
+ * Old builds do not send the header and so are never held to the
+ * requirement. This is the whole reason the check exists: the moment the
+ * server starts demanding a field, every copy of the app already installed
+ * that does not send it starts failing at checkout, and those people have
+ * no way to fix it except waiting for a release.
+ *
+ * Delete this once no build without the header is still in use.
+ */
+function mc_orders_client_collects_phone( WP_REST_Request $request ) {
+	return '1' === trim( (string) $request->get_header( 'x_mc_collects_phone' ) );
+}
+
+/**
  * Short, human-readable, and random.
  *
  * Random rather than sequential on purpose: the code is what lets a customer
@@ -301,7 +358,21 @@ function mc_orders_create( WP_REST_Request $request ) {
 	}
 
 	$name  = isset( $body['customer_name'] ) ? sanitize_text_field( $body['customer_name'] ) : '';
-	$phone = isset( $body['customer_phone'] ) ? sanitize_text_field( $body['customer_phone'] ) : '';
+	$phone = mc_orders_clean_phone( isset( $body['customer_phone'] ) ? $body['customer_phone'] : '' );
+
+	/* A build that says it collects a phone number must send one. Builds that
+	   predate the requirement keep working untouched — enforcing on everyone
+	   the moment this deploys would fail every order from the copies already
+	   on testers' phones, which is a worse outcome than a few orders without
+	   a number. The header goes away once no old build is in the wild. */
+	if ( '' === $phone && mc_orders_client_collects_phone( $request ) ) {
+		return new WP_Error(
+			'mc_phone_required',
+			'A contact number is needed so we can tell you when the order is ready.',
+			array( 'status' => 422 )
+		);
+	}
+
 	if ( $name ) {
 		$order->set_billing_first_name( $name );
 	}
