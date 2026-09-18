@@ -195,6 +195,73 @@ function mc_orders_clean_phone( $raw ) {
 }
 
 /**
+ * Builds the meta that records whether someone agreed to marketing.
+ *
+ * Returns an array of meta to write, or WP_Error if the request is not one
+ * we are willing to treat as consent.
+ *
+ * Consent has to be *evidence*, not a flag. If somebody later asks why they
+ * are getting messages, "the app sent true" is not an answer — so this keeps
+ * when they agreed and which build of which app put the wording in front of
+ * them. The wording lives in that build's source, and the build number is
+ * recorded, so the exact words can always be recovered.
+ *
+ * Two things this deliberately refuses:
+ *
+ *   - Consent with no way to reach them. Agreeing to offers while sending no
+ *     number is incoherent, and storing it would leave a yes on file that can
+ *     never be acted on or cleanly withdrawn.
+ *   - Consent from a client that does not say which build it is. Without that
+ *     there is no record of what was actually shown, which is the part that
+ *     matters if it is ever questioned.
+ *
+ * Declining is always recorded as a plain no. Absence of a key is not the
+ * same as someone having been asked and said no, and only the latter should
+ * stop us asking again later.
+ */
+function mc_orders_read_marketing_consent( $body, WP_REST_Request $request, $phone ) {
+	$asked = array_key_exists( 'marketing_opt_in', (array) $body );
+	if ( ! $asked ) {
+		// A build that never showed the question. Nothing to record.
+		return array();
+	}
+
+	$opted_in = filter_var( $body['marketing_opt_in'], FILTER_VALIDATE_BOOLEAN );
+
+	if ( ! $opted_in ) {
+		return array(
+			'_mc_marketing_opt_in' => 'no',
+			'_mc_marketing_asked_at' => current_time( 'c', true ),
+		);
+	}
+
+	if ( '' === $phone ) {
+		return new WP_Error(
+			'mc_marketing_needs_channel',
+			'Cannot agree to offers without a contact number to send them to.',
+			array( 'status' => 422 )
+		);
+	}
+
+	$build    = (string) $request->get_header( 'x_mc_app_build' );
+	$platform = sanitize_key( (string) $request->get_header( 'x_mc_app_platform' ) );
+
+	if ( '' === $build || '' === $platform ) {
+		return new WP_Error(
+			'mc_marketing_unattributable',
+			'Consent must say which app and build asked for it.',
+			array( 'status' => 422 )
+		);
+	}
+
+	return array(
+		'_mc_marketing_opt_in'    => 'yes',
+		'_mc_marketing_asked_at'  => current_time( 'c', true ),
+		'_mc_marketing_source'    => $platform . ' build ' . absint( $build ),
+	);
+}
+
+/**
  * Whether the app that sent this order says it collects a phone number.
  *
  * Old builds do not send the header and so are never held to the
@@ -373,6 +440,11 @@ function mc_orders_create( WP_REST_Request $request ) {
 		);
 	}
 
+	$marketing = mc_orders_read_marketing_consent( $body, $request, $phone );
+	if ( is_wp_error( $marketing ) ) {
+		return $marketing;
+	}
+
 	if ( $name ) {
 		$order->set_billing_first_name( $name );
 	}
@@ -405,6 +477,10 @@ function mc_orders_create( WP_REST_Request $request ) {
 	$order->set_payment_method_title( $method === 'apple_pay' ? 'Apple Pay (at truck)' : 'Card or cash (at truck)' );
 	// The id itself, so the console can split takings by method.
 	$order->update_meta_data( '_mc_payment_method', $method );
+
+	foreach ( $marketing as $meta_key => $meta_value ) {
+		$order->update_meta_data( $meta_key, $meta_value );
+	}
 
 	$order->calculate_totals();
 	$order->set_status( 'on-hold', 'Placed from the customer app. Payment on collection.' );
