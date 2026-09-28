@@ -11,8 +11,8 @@ import { readSection, writeSection, hydrateConsoleState } from './consoleState.j
    call them did not change. */
 
 export const DEFAULT_CONNECTORS = {
-  website: { label: 'Website (WooCommerce)', url: 'https://dev2.meltingcheese.food', kind: 'products', ck: '', cs: '' },
-  app: { label: 'Mobile App source (WooCommerce)', url: 'https://dev2.meltingcheese.food', kind: 'products', ck: '', cs: '' },
+  website: { label: 'Website (WooCommerce)', url: 'https://dev2.meltingcheese.food', kind: 'products' },
+  app: { label: 'Mobile App source (WooCommerce)', url: 'https://dev2.meltingcheese.food', kind: 'products' },
   github: { label: 'GitHub repo', url: 'https://github.com/timxdel-droid/melting-cheese-ios', kind: 'link' },
   codemagic: { label: 'Codemagic CI', url: 'https://codemagic.io/apps', kind: 'link' },
   appledev: { label: 'Apple Developer', url: 'https://appstoreconnect.apple.com', kind: 'link' },
@@ -111,52 +111,37 @@ export async function syncProducts(connectors) {
   return result
 }
 
-/* Push edited fields back to every product connector that has write
-   credentials (WooCommerce REST v3, key pair entered in the Sync panel).
-   Both the website and the mobile app read from these backends, so a
-   successful push updates both applications. */
+/* Push edited fields (name, price, stock) to the store. Goes through our
+   own mc/v1/products route with the operator's login token - the same path
+   the Product Editor uses. Until 28 Sep this hit WooCommerce's wc/v3 with a
+   consumer key pair kept in the browser; that pair is gone, on purpose. */
 export async function pushProduct(connectors, productId, changes) {
-  const targets = []
-  const seen = new Set()
-  for (const key of ['website', 'app']) {
-    const c = connectors[key]
-    if (c && c.url && c.ck && c.cs) {
-      const base = c.url.replace(/\/+$/, '')
-      if (!seen.has(base)) { seen.add(base); targets.push({ key, base, ck: c.ck, cs: c.cs }) }
-    }
-  }
-  if (!targets.length) return { ok: false, results: ['No write credentials — add a WooCommerce API key in the Sync panel'] }
+  if (!hasApiToken()) return { ok: false, results: ['Log in first - saving needs your account.'] }
 
   const body = {}
   if (changes.name != null) body.name = changes.name
   if (changes.price != null) body.regular_price = String(changes.price)
   if (changes.inStock != null) body.stock_status = changes.inStock ? 'instock' : 'outofstock'
-  if (changes.qty != null) { body.manage_stock = true; body.stock_quantity = Number(changes.qty) }
+  if (changes.qty != null) body.stock_quantity = changes.qty === '' ? null : Number(changes.qty)
 
-  const results = []
-  let ok = true
-  for (const t of targets) {
-    try {
-      const res = await fetch(t.base + '/wp-json/wc/v3/products/' + productId, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Basic ' + btoa(t.ck + ':' + t.cs),
-        },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) throw new Error('HTTP ' + res.status)
-      results.push(t.key + ': updated')
-    } catch (e) {
-      ok = false
-      results.push(t.key + ': ' + (e.message || 'failed'))
-    }
+  try {
+    const res = await fetch(STORE_API + '/products/' + productId, {
+      method: 'POST',
+      headers: tokenHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) return { ok: false, results: ['store: ' + await storeError(res, 'Save failed')] }
+    return { ok: true, results: ['store: updated'] }
+  } catch (e) {
+    return { ok: false, results: ['store: ' + (e.message || 'failed')] }
   }
-  return { ok, results }
 }
 
-export function hasWriteAccess(connectors) {
-  return ['website', 'app'].some(k => connectors[k] && connectors[k].url && connectors[k].ck && connectors[k].cs)
+/* "Can this console change products?" used to mean "is a WooCommerce key
+   pair entered". It now means "is someone logged in" - the token carries
+   the products scope, and the server checks the account's capability. */
+export function hasWriteAccess(/* connectors - kept for call sites */) {
+  return hasApiToken()
 }
 
 /* ---- Events -------------------------------------------------------------

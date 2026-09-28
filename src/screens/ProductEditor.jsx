@@ -73,10 +73,10 @@ export default function ProductEditor() {
         <Head />
         <div className="card" style={{ padding: 22, textAlign: 'center' }}>
           <div style={{ fontSize: 26, marginBottom: 8 }}>🔑</div>
-          <b style={{ fontSize: 13.5 }}>Product editing needs a WooCommerce API key</b>
+          <b style={{ fontSize: 13.5 }}>Log in to edit products</b>
           <div style={{ ...muted, marginTop: 6, lineHeight: 1.6, maxWidth: 460, margin: '6px auto 0' }}>
-            Open the Sync panel and add a Read/Write consumer key and secret. Without one
-            ROS can read the catalogue but cannot change it.
+            Changes are saved under your own account. Sign out and back in if this
+            keeps showing after a login.
           </div>
         </div>
       </div>

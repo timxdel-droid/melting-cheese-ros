@@ -23,12 +23,6 @@ export default function SyncPanel({ onSynced, lastSync, autoSync = true }) {
 
   const set = (key, field, value) => setConns(c => ({ ...c, [key]: { ...c[key], [field]: value } }))
 
-  /* One key pair drives both product sources — they point at the same store. */
-  const setKeys = (field, value) => setConns(c => {
-    const apply = field === 'clear' ? { ck: '', cs: '' } : { [field]: value }
-    return { ...c, website: { ...c.website, ...apply }, app: { ...c.app, ...apply } }
-  })
-  const keysSet = !!(conns.website.ck && conns.website.cs)
 
   const [token, setToken] = useState(loadApiToken)
   const [wpTest, setWpTest] = useState(null)
@@ -114,61 +108,10 @@ export default function SyncPanel({ onSynced, lastSync, autoSync = true }) {
               from the WooCommerce Store API; the rest are saved as quick links.
             </div>
 
-            {/* ---- API keys: own block, top of the panel, applied to both sources ---- */}
-            <div style={{
-              border: '1px solid var(--mc-orange)', background: 'var(--amber-chip)',
-              borderRadius: 10, padding: 14, marginBottom: 16,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 3 }}>
-                <b style={{ fontSize: 13 }}>WooCommerce API key</b>
-                <div style={{ flex: 1 }} />
-                <span className={'pill ' + (keysSet ? 'green' : 'gray')}>
-                  {keysSet ? 'Push enabled' : 'Not set — read only'}
-                </span>
-              </div>
-              <div style={{ ...muted, marginBottom: 9, color: 'var(--ink-2)' }}>
-                Required to push prices, stock and quantities back out to the website
-                and the mobile app. Without it ROS can read products but not change them.
-              </div>
-
-              <label style={{ fontSize: 11, fontWeight: 700, display: 'block', marginBottom: 3 }}>
-                Consumer key
-              </label>
-              <input style={{ ...field, marginBottom: 8 }} value={conns.website.ck || ''}
-                placeholder="ck_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                autoComplete="off" spellCheck="false"
-                onChange={e => setKeys('ck', e.target.value.trim())} />
-
-              <label style={{ fontSize: 11, fontWeight: 700, display: 'block', marginBottom: 3 }}>
-                Consumer secret
-              </label>
-              <input style={field} type={showSecret ? 'text' : 'password'} value={conns.website.cs || ''}
-                placeholder="cs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                autoComplete="off" spellCheck="false"
-                onChange={e => setKeys('cs', e.target.value.trim())} />
-
-              <div style={{ display: 'flex', alignItems: 'center', marginTop: 8, gap: 10 }}>
-                <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={showSecret}
-                    onChange={e => setShowSecret(e.target.checked)} />
-                  Show secret
-                </label>
-                <div style={{ flex: 1 }} />
-                {keysSet && (
-                  <button style={{ fontSize: 11, color: 'var(--red)', fontWeight: 700, cursor: 'pointer' }}
-                    onClick={() => setKeys('clear')}>Clear keys</button>
-                )}
-              </div>
-
-              <div style={{ ...muted, marginTop: 9, lineHeight: 1.5 }}>
-                Get one from WordPress admin › <b>WooCommerce › Settings › Advanced ›
-                REST API › Add key</b> — set Permissions to <b>Read/Write</b>.
-                The pair is applied to both product sources and is stored only in this browser,
-                never sent anywhere except your own store.
-              </div>
-            </div>
-
-            {/* ---- App publishing credential: separate from the store keys ---- */}
+            {/* The WooCommerce consumer key pair used to live here. Product edits
+                now go through mc/v1 with the operator's login, so there is no
+                second credential to paste, lose or leak. */}
+            {/* ---- Access credential (set by login; advanced) ---- */}
             <div style={{
               border: '1px solid var(--line)', borderRadius: 10, padding: 14, marginBottom: 16,
             }}>
