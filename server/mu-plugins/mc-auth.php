@@ -225,6 +225,14 @@ function mc_auth_verify() {
 		return $deny();
 	}
 
+	// Session tokens (minted by mc-login.php) carry an expiry. An API token
+	// has none and lives until revoked.
+	if ( ! empty( $record['expires'] ) && strtotime( $record['expires'] ) < time() ) {
+		unset( $tokens[ $id ] );
+		mc_auth_save_all( $tokens );
+		return $deny( 'mc_auth_expired', 401, 'Your session has expired. Please log in again.' );
+	}
+
 	$user = get_user_by( 'id', (int) $record['user_id'] );
 	if ( ! $user ) {
 		// The account behind the token is gone; the token must die with it.

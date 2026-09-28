@@ -1,4 +1,5 @@
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, Outlet, useLocation } from 'react-router-dom'
+import { isLoggedIn } from './lib/session.js'
 import Login from './screens/Login.jsx'
 import Shell from './components/Shell.jsx'
 import Dashboard from './screens/Dashboard.jsx'
@@ -21,12 +22,22 @@ import LiveOrders from './screens/LiveOrders.jsx'
 import ProductEditor from './screens/ProductEditor.jsx'
 import Placeholder from './screens/Placeholder.jsx'
 
+/* Nothing past the login screen renders without a live session. The
+   redirect remembers where you were going, so a link into a deep screen
+   still lands there after logging in. */
+function RequireLogin() {
+  const loc = useLocation()
+  if (!isLoggedIn()) return <Navigate to="/login" replace state={{ from: loc.pathname }} />
+  return <Outlet />
+}
+
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/login" replace />} />
+      <Route path="/" element={<Navigate to={isLoggedIn() ? '/dashboard' : '/login'} replace />} />
       <Route path="/login" element={<Login />} />
 
+      <Route element={<RequireLogin />}>
       <Route element={<Shell />}>
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/customers" element={<Users />} />
@@ -62,6 +73,7 @@ export default function App() {
         <Route path="/finance" element={<Placeholder title="Finance" />} />
         <Route path="/settings" element={<Placeholder title="Settings" />} />
         <Route path="/support" element={<Placeholder title="Support" />} />
+      </Route>
       </Route>
 
       <Route path="*" element={<Navigate to="/login" replace />} />

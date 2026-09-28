@@ -2,6 +2,30 @@ import { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { fetchOrders, hasApiToken } from '../lib/connectors.js'
 import SyncPill from './SyncPill.jsx'
+import { loadSession, refreshSession, logout } from '../lib/session.js'
+
+/* Confirms with the server every few minutes that this session is still
+   good. A session revoked from wp-admin, or expired while the tab sat
+   open, sends the operator back to the login screen instead of leaving
+   them clicking Save into a wall of 401s. */
+const SESSION_CHECK_MS = 5 * 60_000
+
+function useSession(nav) {
+  const [session, setSession] = useState(loadSession())
+  useEffect(() => {
+    let cancelled = false
+    const check = async () => {
+      const s = await refreshSession()
+      if (cancelled) return
+      if (s === null) { await logout(); nav('/login', { replace: true }); return }
+      setSession(s)
+    }
+    check()
+    const timer = setInterval(check, SESSION_CHECK_MS)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [])
+  return session
+}
 
 /* How often the sidebar re-counts waiting orders. Matches the Live Orders
    screen so the badge and the list never disagree for long. */
@@ -73,6 +97,8 @@ function today() {
 
 export default function Shell() {
   const nav = useNavigate()
+  const session = useSession(nav)
+  const who = (session && session.user) || {}
   const loc = useLocation()
   const t = today()
   const [open, setOpen] = useState(false)
@@ -161,10 +187,12 @@ export default function Shell() {
               <div style={{
                 width: 30, height: 30, borderRadius: 15, background: 'var(--mc-orange)',
                 color: '#fff', fontWeight: 800, fontSize: 12, display: 'grid', placeItems: 'center',
-              }}>MC</div>
+              }}>{who.initials || 'MC'}</div>
               <div style={{ lineHeight: 1.1, textAlign: 'left' }}>
-                <div style={{ fontWeight: 700, fontSize: 12.5 }}>Melting Ops</div>
-                <div style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>Super Admin</div>
+                <div style={{ fontWeight: 700, fontSize: 12.5 }}>{who.name || 'Melting Ops'}</div>
+                <div style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
+                  {who.role || (session ? 'Operator' : 'API token')}
+                </div>
               </div>
               <span style={{ fontSize: 10, color: 'var(--ink-3)' }}>{userMenu ? '▲' : '▼'}</span>
             </button>
@@ -177,7 +205,7 @@ export default function Shell() {
                   display: 'flex', gap: 9, alignItems: 'center', width: '100%',
                   padding: '9px 11px', borderRadius: 8, fontSize: 13, color: 'var(--ink-2)',
                 }}>⚙ Account Settings</button>
-                <button onClick={() => { setUserMenu(false); nav('/login') }} style={{
+                <button onClick={async () => { setUserMenu(false); await logout(); nav('/login', { replace: true }) }} style={{
                   display: 'flex', gap: 9, alignItems: 'center', width: '100%',
                   padding: '9px 11px', borderRadius: 8, fontSize: 13, fontWeight: 700, color: 'var(--red)',
                 }}>🚪 Sign Out</button>
