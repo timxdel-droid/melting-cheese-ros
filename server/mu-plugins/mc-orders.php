@@ -45,6 +45,20 @@ const MC_ORDERS_CODE_META  = '_mc_collection_code';
 const MC_ORDERS_SOURCE_META = '_mc_source';
 const MC_ORDERS_TRUCK_META  = '_mc_truck';
 
+/* Kitchen lifecycle (28 Sep 2026). The kitchen tablet drives status; ROS
+   watches. Ready is a timestamp, not a WooCommerce status - see
+   mc_orders_kitchen_status() for why. */
+const MC_ORDERS_REVISION_META    = '_mc_revision';
+const MC_ORDERS_ACCEPTED_META    = '_mc_accepted_at';
+const MC_ORDERS_READY_META       = '_mc_ready_at';
+const MC_ORDERS_CANCELLED_META   = '_mc_cancelled_at';
+const MC_ORDERS_CANCEL_CODE_META = '_mc_cancel_reason_code';
+const MC_ORDERS_CANCEL_NOTE_META = '_mc_cancel_reason';
+const MC_ORDERS_EDITS_META       = '_mc_edits';
+const MC_ORDERS_ACTIONS_META     = '_mc_action_ids';   // recent client ids, for retry dedupe
+const MC_ORDERS_LINE_ADDONS_META = '_mc_addons';       // hidden per-line add-on ids
+const MC_ORDERS_MAX_ACTION_IDS   = 40;
+
 const MC_ORDERS_MAX_LINES    = 40;
 const MC_ORDERS_MAX_QTY      = 20;
 const MC_ORDERS_RATE_LIMIT   = 10;   // orders per window, per IP
@@ -69,6 +83,104 @@ function mc_orders_addons() {
 		'fries'        => array( 'name' => 'Fries (M)',          'price' => 15 ),
 		'jollof-half'  => array( 'name' => 'Jollof Rice (Half)', 'price' => 12 ),
 	);
+}
+
+/**
+ * Cancel reasons. The code is what gets counted later ("how many no-shows
+ * at Afro Loud?"); the label is what the guest's app shows.
+ */
+function mc_orders_cancel_reasons() {
+	return array(
+		'no_show'        => 'Not collected',
+		'sold_out'       => 'Sold out',
+		'closing'        => 'Kitchen closing',
+		'duplicate'      => 'Duplicate order',
+		'customer_asked' => 'Cancelled at the guest\'s request',
+		'other'          => 'Other',
+	);
+}
+
+/**
+ * The kitchen's view of an order, derived from the WooCommerce status plus
+ * our own timestamps. Ready is deliberately NOT a registered WooCommerce
+ * status: registering one means register_post_status, the wc_order_statuses
+ * filter AND the HPOS hook, and getting any of them wrong is a live-store
+ * debugging session. A timestamp gives the same information and, as a
+ * bonus, placed->ready is prep time and ready->collected is wait time,
+ * which a single status could never tell apart.
+ */
+function mc_orders_kitchen_status( $order ) {
+	switch ( $order->get_status() ) {
+		case 'cancelled':
+			return 'cancelled';
+		case 'completed':
+			return 'collected';
+		case 'processing':
+			return $order->get_meta( MC_ORDERS_READY_META ) ? 'ready' : 'preparing';
+		default:
+			return 'received';
+	}
+}
+
+/** What the kitchen may do next. Mirrors Ticket.kt nextStates() exactly. */
+function mc_orders_next_states( $from ) {
+	switch ( $from ) {
+		case 'received':
+			return array( 'preparing', 'cancelled' );
+		case 'preparing':
+			return array( 'ready', 'collected', 'cancelled' );
+		case 'ready':
+			return array( 'collected', 'cancelled' );
+		default:
+			return array();
+	}
+}
+
+function mc_orders_revision( $order ) {
+	$r = (int) $order->get_meta( MC_ORDERS_REVISION_META );
+	return $r > 0 ? $r : 1;
+}
+
+function mc_orders_bump_revision( $order ) {
+	$order->update_meta_data( MC_ORDERS_REVISION_META, mc_orders_revision( $order ) + 1 );
+}
+
+/**
+ * Retry safety. The tablet sends a client-made id with every write; if we
+ * have applied it already, the write is answered with the current order
+ * and NOT applied again. Covers the reply being lost rather than the
+ * request - the case where a blind retry would double an edit.
+ */
+function mc_orders_action_seen( $order, $action_id ) {
+	if ( '' === $action_id ) {
+		return false;
+	}
+	$seen = $order->get_meta( MC_ORDERS_ACTIONS_META );
+	return is_array( $seen ) && in_array( $action_id, $seen, true );
+}
+
+function mc_orders_action_remember( $order, $action_id ) {
+	if ( '' === $action_id ) {
+		return;
+	}
+	$seen   = $order->get_meta( MC_ORDERS_ACTIONS_META );
+	$seen   = is_array( $seen ) ? $seen : array();
+	$seen[] = $action_id;
+	if ( count( $seen ) > MC_ORDERS_MAX_ACTION_IDS ) {
+		$seen = array_slice( $seen, -MC_ORDERS_MAX_ACTION_IDS );
+	}
+	$order->update_meta_data( MC_ORDERS_ACTIONS_META, $seen );
+}
+
+/** 409 with the current order, so the tablet can show what really happened. */
+function mc_orders_conflict( $order, $claimed ) {
+	return new WP_REST_Response( array(
+		'code'     => 'mc_stale_revision',
+		'message'  => 'This order was changed by someone else first.',
+		'expected' => (int) $claimed,
+		'actual'   => mc_orders_revision( $order ),
+		'order'    => mc_orders_payload( $order ),
+	), 409 );
 }
 
 /** The states an order moves through, in order. */
@@ -118,10 +230,22 @@ function mc_orders_routes() {
 			: '__return_false',
 	) );
 
-	// Console: staff advance an order.
+	// Kitchen (and console): advance an order. Accepts the kitchen vocabulary
+	// (preparing / ready / collected / cancelled) as well as the WooCommerce
+	// one the console has always sent.
 	register_rest_route( 'mc/v1', '/orders/(?P<id>\d+)/status', array(
 		'methods'             => 'POST',
 		'callback'            => 'mc_orders_set_status',
+		'permission_callback' => function_exists( 'mc_auth_require' )
+			? mc_auth_require( 'orders', 'edit_shop_orders' )
+			: '__return_false',
+	) );
+
+	// Kitchen: change what is on an order. Declarative - the body is the
+	// desired result, not a list of changes - so a retry is harmless.
+	register_rest_route( 'mc/v1', '/orders/(?P<id>\d+)/items', array(
+		'methods'             => 'POST',
+		'callback'            => 'mc_orders_edit_items',
 		'permission_callback' => function_exists( 'mc_auth_require' )
 			? mc_auth_require( 'orders', 'edit_shop_orders' )
 			: '__return_false',
@@ -403,6 +527,10 @@ function mc_orders_create( WP_REST_Request $request ) {
 					$addon_count[ $addon_id ] = $running + $line['qty'];
 				}
 				$item_obj->add_meta_data( 'Extras', implode( ', ', $labels ), true );
+				// The ids, hidden (leading underscore keeps them off the admin
+				// screen), so an edit can rebuild the fee lines from the
+				// surviving lines instead of reversing labels back to ids.
+				$item_obj->add_meta_data( MC_ORDERS_LINE_ADDONS_META, $line['add_ons'], true );
 			}
 			if ( $line['note'] ) {
 				$item_obj->add_meta_data( 'Note', $line['note'], true );
@@ -482,6 +610,7 @@ function mc_orders_create( WP_REST_Request $request ) {
 		$order->update_meta_data( $meta_key, $meta_value );
 	}
 
+	$order->update_meta_data( MC_ORDERS_REVISION_META, 1 );
 	$order->calculate_totals();
 	$order->set_status( 'on-hold', 'Placed from the customer app. Payment on collection.' );
 	$order->save();
@@ -530,7 +659,10 @@ function mc_orders_list( WP_REST_Request $request ) {
 	);
 
 	$status = $request->get_param( 'status' );
-	if ( $status && array_key_exists( $status, mc_orders_states() ) ) {
+	if ( 'active' === $status ) {
+		// Everything still in the kitchen's hands. What the tablet polls.
+		$args['status'] = array( 'on-hold', 'processing' );
+	} elseif ( $status && array_key_exists( $status, mc_orders_states() ) ) {
 		$args['status'] = $status;
 	}
 
@@ -559,7 +691,25 @@ function mc_orders_list( WP_REST_Request $request ) {
 		$out[] = mc_orders_payload( $order );
 	}
 
-	return $out;
+	/* The tablet asks every few seconds. An ETag built from ids + revisions
+	   makes an unchanged answer a 304 with no body - same pattern as
+	   mc/v1/app-config and the Store API. Revisions bump on every write,
+	   so anything that matters to the kitchen changes the tag. */
+	$sig = array();
+	foreach ( $out as $o ) {
+		$sig[] = $o['order_id'] . ':' . $o['revision'] . ':' . $o['kitchen_status'] . ':' . $o['truck'];
+	}
+	$etag = '"' . md5( implode( '|', $sig ) ) . '"';
+	$res  = new WP_REST_Response( $out, 200 );
+	$res->header( 'ETag', $etag );
+	$res->header( 'Cache-Control', 'no-cache' );
+
+	$sent = $request->get_header( 'if_none_match' );
+	if ( $sent && trim( $sent ) === $etag ) {
+		$res->set_status( 304 );
+		$res->set_data( null );
+	}
+	return $res;
 }
 
 /* -------------------------------------------------------------------------
@@ -572,20 +722,277 @@ function mc_orders_set_status( WP_REST_Request $request ) {
 		return new WP_Error( 'mc_not_found', 'No order with that id.', array( 'status' => 404 ) );
 	}
 
-	$body   = $request->get_json_params();
-	$status = isset( $body['status'] ) ? sanitize_key( $body['status'] ) : '';
-	$states = mc_orders_states();
+	$body      = $request->get_json_params();
+	$body      = is_array( $body ) ? $body : array();
+	$wanted    = isset( $body['status'] ) ? sanitize_key( $body['status'] ) : '';
+	$action_id = isset( $body['action_id'] ) ? substr( sanitize_text_field( $body['action_id'] ), 0, 64 ) : '';
+	$claimed   = array_key_exists( 'revision', $body ) ? (int) $body['revision'] : null;
 
-	if ( ! array_key_exists( $status, $states ) ) {
+	// Both vocabularies map onto the kitchen's.
+	$aliases = array(
+		'on-hold'    => 'received',
+		'processing' => 'preparing',
+		'completed'  => 'collected',
+	);
+	$to = isset( $aliases[ $wanted ] ) ? $aliases[ $wanted ] : $wanted;
+
+	if ( ! in_array( $to, array( 'received', 'preparing', 'ready', 'collected', 'cancelled' ), true ) ) {
 		return new WP_Error(
 			'mc_bad_status',
-			'Status must be one of: ' . implode( ', ', array_keys( $states ) ),
+			'Status must be one of: preparing, ready, collected, cancelled (or on-hold, processing, completed).',
 			array( 'status' => 422 )
 		);
 	}
 
+	// Same action arriving twice (retry after a lost reply): answer with the
+	// order as it is, apply nothing.
+	if ( mc_orders_action_seen( $order, $action_id ) ) {
+		return mc_orders_payload( $order );
+	}
+
+	// A caller that says which revision it saw is refused if that has moved.
+	// A caller that says nothing (the console, today) is not - the console
+	// will start sending it when Live Orders becomes read-only.
+	if ( null !== $claimed && $claimed !== mc_orders_revision( $order ) ) {
+		return mc_orders_conflict( $order, $claimed );
+	}
+
+	$from = mc_orders_kitchen_status( $order );
+	if ( $to === $from ) {
+		// Already there. Idempotent, not an error.
+		mc_orders_action_remember( $order, $action_id );
+		$order->save();
+		return mc_orders_payload( $order );
+	}
+	if ( ! in_array( $to, mc_orders_next_states( $from ), true ) ) {
+		return new WP_Error(
+			'mc_illegal_move',
+			sprintf( 'An order that is %s cannot be marked %s.', $from, $to ),
+			array( 'status' => 422, 'from' => $from, 'allowed' => mc_orders_next_states( $from ) )
+		);
+	}
+
 	$user = wp_get_current_user();
-	$order->set_status( $status, 'Changed from the ROS console by ' . ( $user->user_login ?: 'a token' ) . '.' );
+	$who  = $user->user_login ? $user->user_login : 'a token';
+	$now  = current_time( 'c', true );
+
+	switch ( $to ) {
+		case 'preparing':
+			$order->update_meta_data( MC_ORDERS_ACCEPTED_META, $now );
+			$order->set_status( 'processing', 'Accepted by the kitchen (' . $who . ').' );
+			break;
+
+		case 'ready':
+			// Stays "processing" in WooCommerce; the timestamp is the state.
+			$order->update_meta_data( MC_ORDERS_READY_META, $now );
+			$order->add_order_note( 'Marked ready for collection by ' . $who . '.' );
+			break;
+
+		case 'collected':
+			$order->set_status( 'completed', 'Handed over to the guest (' . $who . ').' );
+			break;
+
+		case 'cancelled':
+			$reasons = mc_orders_cancel_reasons();
+			$code    = isset( $body['reason'] ) ? sanitize_key( $body['reason'] ) : '';
+			if ( ! isset( $reasons[ $code ] ) ) {
+				return new WP_Error(
+					'mc_cancel_reason_required',
+					'A cancellation needs a reason: ' . implode( ', ', array_keys( $reasons ) ) . '.',
+					array( 'status' => 422 )
+				);
+			}
+			$note = isset( $body['note'] ) ? substr( sanitize_text_field( $body['note'] ), 0, MC_ORDERS_MAX_NOTE ) : '';
+			$order->update_meta_data( MC_ORDERS_CANCEL_CODE_META, $code );
+			$order->update_meta_data( MC_ORDERS_CANCEL_NOTE_META, $note );
+			$order->update_meta_data( MC_ORDERS_CANCELLED_META, $now );
+			$order->set_status( 'cancelled', 'Cancelled by ' . $who . ': ' . $reasons[ $code ] . ( $note ? ' - ' . $note : '' ) );
+			break;
+
+		case 'received':
+			// Only reachable through the console's legacy "on-hold"; the
+			// kitchen never asks for it. Kept so nothing that works today breaks.
+			$order->set_status( 'on-hold', 'Set back to received by ' . $who . '.' );
+			break;
+	}
+
+	mc_orders_action_remember( $order, $action_id );
+	mc_orders_bump_revision( $order );
+	$order->save();
+
+	return mc_orders_payload( $order );
+}
+
+/* -------------------------------------------------------------------------
+ * Edit the lines - the kitchen changing what is on an order
+ *
+ * Body: { edit_id, revision, keep: [{item_id, qty}], add: [{product_id, qty}] }
+ *
+ * The body is the desired result. Every surviving line is listed at its new
+ * quantity; anything not listed is removed; add is for products the order
+ * did not have. Stating the destination rather than the journey is what
+ * makes a retry safe to send twice, and edit_id closes the remaining gap.
+ * ---------------------------------------------------------------------- */
+
+function mc_orders_edit_items( WP_REST_Request $request ) {
+	$order = wc_get_order( (int) $request['id'] );
+	if ( ! $order ) {
+		return new WP_Error( 'mc_not_found', 'No order with that id.', array( 'status' => 404 ) );
+	}
+
+	$body    = $request->get_json_params();
+	$body    = is_array( $body ) ? $body : array();
+	$edit_id = isset( $body['edit_id'] ) ? substr( sanitize_text_field( $body['edit_id'] ), 0, 64 ) : '';
+	$keep    = isset( $body['keep'] ) && is_array( $body['keep'] ) ? $body['keep'] : array();
+	$add     = isset( $body['add'] ) && is_array( $body['add'] ) ? $body['add'] : array();
+
+	if ( mc_orders_action_seen( $order, $edit_id ) ) {
+		return mc_orders_payload( $order );
+	}
+
+	// Revision is mandatory here. An edit against an order you have not
+	// seen the latest version of is exactly the write this exists to stop.
+	if ( ! array_key_exists( 'revision', $body ) ) {
+		return new WP_Error( 'mc_revision_required', 'Send the revision you are editing.', array( 'status' => 422 ) );
+	}
+	if ( (int) $body['revision'] !== mc_orders_revision( $order ) ) {
+		return mc_orders_conflict( $order, (int) $body['revision'] );
+	}
+
+	$state = mc_orders_kitchen_status( $order );
+	if ( in_array( $state, array( 'collected', 'cancelled' ), true ) ) {
+		return new WP_Error( 'mc_order_done', 'A ' . $state . ' order cannot be edited.', array( 'status' => 422 ) );
+	}
+
+	/* ---- validate everything before touching anything ---- */
+
+	$existing = array();   // item_id => WC_Order_Item_Product
+	foreach ( $order->get_items() as $item_id => $item ) {
+		$existing[ (int) $item_id ] = $item;
+	}
+
+	$keep_map = array();   // item_id => qty
+	foreach ( $keep as $k ) {
+		$iid = isset( $k['item_id'] ) ? (int) $k['item_id'] : 0;
+		$qty = isset( $k['qty'] ) ? (int) $k['qty'] : 0;
+		if ( ! isset( $existing[ $iid ] ) ) {
+			return new WP_Error( 'mc_unknown_line', 'Line ' . $iid . ' is not on this order.', array( 'status' => 422 ) );
+		}
+		if ( $qty < 1 || $qty > MC_ORDERS_MAX_QTY ) {
+			return new WP_Error( 'mc_bad_qty', 'Quantities must be between 1 and ' . MC_ORDERS_MAX_QTY . '.', array( 'status' => 422 ) );
+		}
+		$keep_map[ $iid ] = $qty;
+	}
+
+	$additions = array();  // [product, qty]
+	foreach ( $add as $a ) {
+		$pid = isset( $a['product_id'] ) ? absint( $a['product_id'] ) : 0;
+		$qty = isset( $a['qty'] ) ? (int) $a['qty'] : 0;
+		if ( $qty < 1 || $qty > MC_ORDERS_MAX_QTY ) {
+			return new WP_Error( 'mc_bad_qty', 'Quantities must be between 1 and ' . MC_ORDERS_MAX_QTY . '.', array( 'status' => 422 ) );
+		}
+		$product = $pid ? wc_get_product( $pid ) : null;
+		if ( ! $product || 'publish' !== $product->get_status() || ! $product->is_purchasable() ) {
+			return new WP_Error( 'mc_unknown_product', 'One of those items is not available.', array( 'status' => 422 ) );
+		}
+		$additions[] = array( $product, $qty );
+	}
+
+	if ( empty( $keep_map ) && empty( $additions ) ) {
+		return new WP_Error(
+			'mc_would_empty',
+			'That would leave nothing on the order. Cancel it instead, so the guest is told.',
+			array( 'status' => 422 )
+		);
+	}
+	if ( count( $keep_map ) + count( $additions ) > MC_ORDERS_MAX_LINES ) {
+		return new WP_Error( 'mc_too_many_lines', 'That order has too many separate items.', array( 'status' => 422 ) );
+	}
+
+	/* ---- apply ---- */
+
+	$old_total = (float) $order->get_total();
+	$changes   = array();
+
+	foreach ( $existing as $iid => $item ) {
+		$name = $item->get_name();
+		if ( ! isset( $keep_map[ $iid ] ) ) {
+			$order->remove_item( $iid );
+			$changes[] = 'removed ' . $name;
+			continue;
+		}
+		$new_qty = $keep_map[ $iid ];
+		$old_qty = (int) $item->get_quantity();
+		if ( $new_qty !== $old_qty ) {
+			$product = $item->get_product();
+			// Every price from the product, never from the request.
+			$unit = $product ? (float) $product->get_price() : ( $old_qty ? (float) $item->get_subtotal() / $old_qty : 0 );
+			$item->set_quantity( $new_qty );
+			$item->set_subtotal( wc_format_decimal( $unit * $new_qty ) );
+			$item->set_total( wc_format_decimal( $unit * $new_qty ) );
+			$item->save();
+			$changes[] = $name . ' x' . $old_qty . ' -> x' . $new_qty;
+		}
+	}
+
+	foreach ( $additions as $pair ) {
+		list( $product, $qty ) = $pair;
+		$order->add_product( $product, $qty );
+		$changes[] = 'added ' . $product->get_name() . ' x' . $qty;
+	}
+
+	/* Fee lines are rebuilt from the surviving lines' hidden add-on ids, so
+	   removing the only line that had Fries also removes the Fries charge. */
+	foreach ( $order->get_items( 'fee' ) as $fee_id => $fee ) {
+		$order->remove_item( $fee_id );
+	}
+	$catalogue   = mc_orders_addons();
+	$addon_count = array();
+	foreach ( $order->get_items() as $item ) {
+		$ids = $item->get_meta( MC_ORDERS_LINE_ADDONS_META );
+		if ( ! is_array( $ids ) ) {
+			continue;
+		}
+		foreach ( $ids as $addon_id ) {
+			if ( isset( $catalogue[ $addon_id ] ) ) {
+				$running = isset( $addon_count[ $addon_id ] ) ? $addon_count[ $addon_id ] : 0;
+				$addon_count[ $addon_id ] = $running + (int) $item->get_quantity();
+			}
+		}
+	}
+	foreach ( $addon_count as $addon_id => $addon_qty ) {
+		$amount = $catalogue[ $addon_id ]['price'] * $addon_qty;
+		$fee    = new WC_Order_Item_Fee();
+		$fee->set_name( $catalogue[ $addon_id ]['name'] . ( $addon_qty > 1 ? ' x' . $addon_qty : '' ) );
+		$fee->set_amount( (string) $amount );
+		$fee->set_total( (string) $amount );
+		$fee->set_tax_status( 'none' );
+		$order->add_item( $fee );
+	}
+
+	$order->calculate_totals();
+	$new_total = (float) $order->get_total();
+
+	$user    = wp_get_current_user();
+	$who     = $user->user_login ? $user->user_login : 'a token';
+	$summary = $changes ? implode( '; ', $changes ) : 'no change';
+
+	// The guest's app reads this list - "order edited" on its own tells a
+	// guest nothing; "removed Fries; Jollof x2 -> x1" does.
+	$log   = $order->get_meta( MC_ORDERS_EDITS_META );
+	$log   = is_array( $log ) ? $log : array();
+	$log[] = array(
+		'at'        => current_time( 'c', true ),
+		'by'        => $who,
+		'summary'   => $summary,
+		'old_total' => $old_total,
+		'new_total' => $new_total,
+	);
+	$order->update_meta_data( MC_ORDERS_EDITS_META, $log );
+	$order->add_order_note( 'Edited by the kitchen (' . $who . '): ' . $summary . '. Total ' . $old_total . ' -> ' . $new_total . '.' );
+
+	mc_orders_action_remember( $order, $edit_id );
+	mc_orders_bump_revision( $order );
 	$order->save();
 
 	return mc_orders_payload( $order );
@@ -608,6 +1015,7 @@ function mc_orders_set_truck( WP_REST_Request $request ) {
 	if ( '' === $truck ) {
 		$order->delete_meta_data( MC_ORDERS_TRUCK_META );
 		$order->add_order_note( 'Taken off its truck from the ROS console.' );
+		mc_orders_bump_revision( $order );
 		$order->save();
 		return mc_orders_payload( $order );
 	}
@@ -644,6 +1052,7 @@ function mc_orders_set_truck( WP_REST_Request $request ) {
 
 	$order->update_meta_data( MC_ORDERS_TRUCK_META, $truck );
 	$order->add_order_note( sprintf( 'Assigned to %s from the ROS console.', $match['name'] ? $match['name'] : $truck ) );
+	mc_orders_bump_revision( $order );
 	$order->save();
 
 	return mc_orders_payload( $order );
@@ -675,13 +1084,18 @@ function mc_orders_payload( $order ) {
 	$status = $order->get_status();
 
 	$items = array();
-	foreach ( $order->get_items() as $item ) {
+	foreach ( $order->get_items() as $item_id => $item ) {
+		$qty     = (int) $item->get_quantity();
 		$items[] = array(
-			'name'     => $item->get_name(),
-			'quantity' => $item->get_quantity(),
-			'total'    => $item->get_total(),
-			'extras'   => (string) $item->get_meta( 'Extras' ),
-			'note'     => (string) $item->get_meta( 'Note' ),
+			// The id an edit refers to. Names repeat and positions move.
+			'item_id'    => (int) $item_id,
+			'product_id' => (int) $item->get_product_id(),
+			'name'       => $item->get_name(),
+			'quantity'   => $qty,
+			'unit_price' => $qty ? (float) $item->get_subtotal() / $qty : 0,
+			'total'      => $item->get_total(),
+			'extras'     => (string) $item->get_meta( 'Extras' ),
+			'note'       => (string) $item->get_meta( 'Note' ),
 		);
 	}
 
@@ -702,6 +1116,9 @@ function mc_orders_payload( $order ) {
 		'truck'           => $order->get_meta( MC_ORDERS_TRUCK_META ),
 		'status'          => $status,
 		'status_label'    => isset( $states[ $status ] ) ? $states[ $status ] : ucfirst( $status ),
+		// The kitchen's view: received / preparing / ready / collected / cancelled.
+		'kitchen_status'  => mc_orders_kitchen_status( $order ),
+		'revision'        => mc_orders_revision( $order ),
 		'customer'        => $order->get_billing_first_name(),
 		'phone'           => $order->get_billing_phone(),
 		'items'           => $items,
@@ -715,5 +1132,14 @@ function mc_orders_payload( $order ) {
 		// Set when the order is marked Collected; placed -> collected is the
 		// prep time the dashboard averages.
 		'completed_at'    => $order->get_date_completed() ? $order->get_date_completed()->date( 'c' ) : null,
+		// Kitchen timeline. placed -> accepted is queue time, accepted -> ready
+		// is cook time, ready -> collected is wait time.
+		'accepted_at'     => $order->get_meta( MC_ORDERS_ACCEPTED_META ) ?: null,
+		'ready_at'        => $order->get_meta( MC_ORDERS_READY_META ) ?: null,
+		'cancelled_at'    => $order->get_meta( MC_ORDERS_CANCELLED_META ) ?: null,
+		'cancel_reason_code' => $order->get_meta( MC_ORDERS_CANCEL_CODE_META ) ?: null,
+		'cancel_reason'   => $order->get_meta( MC_ORDERS_CANCEL_NOTE_META ) ?: '',
+		'note'            => (string) $order->get_customer_note(),
+		'edits'           => is_array( $order->get_meta( MC_ORDERS_EDITS_META ) ) ? array_values( $order->get_meta( MC_ORDERS_EDITS_META ) ) : array(),
 	);
 }

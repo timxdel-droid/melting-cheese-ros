@@ -871,13 +871,15 @@ export async function fetchOrders({ status, event, truck, perPage = 50 } = {}) {
   }
 }
 
-export async function setOrderStatus(orderId, status) {
+/* extra: { reason, note } for a cancellation. The server refuses to cancel
+   without a reason code - that is what makes no-shows countable later. */
+export async function setOrderStatus(orderId, status, extra) {
   if (!hasApiToken()) return { ok: false, message: 'Add the API token in the Sync panel first.' }
   try {
     const res = await fetch(STORE_API + '/orders/' + orderId + '/status', {
       method: 'POST',
       headers: tokenHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ status }),
+      body: JSON.stringify(Object.assign({ status }, extra || {})),
     })
     if (!res.ok) return { ok: false, message: await storeError(res, 'Could not update the order') }
     return { ok: true, order: await res.json() }
