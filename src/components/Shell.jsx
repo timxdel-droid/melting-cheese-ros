@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { fetchOrders, hasApiToken } from '../lib/connectors.js'
+import SyncPill from './SyncPill.jsx'
 
 /* How often the sidebar re-counts waiting orders. Matches the Live Orders
    screen so the badge and the list never disagree for long. */
@@ -144,6 +145,7 @@ export default function Shell() {
         }}>
           <button className="hamburger" title="Menu" onClick={() => setOpen(!open)}>☰</button>
           <span className="pill gray">☀ Light</span>
+          <SyncPill />
           <div style={{ fontSize: 13.5 }}>
             <b>Today</b>&ensp;{t.day}&ensp;<span style={{ color: 'var(--ink-2)' }}>Time {t.time}</span>
           </div>

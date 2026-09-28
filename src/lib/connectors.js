@@ -3,8 +3,12 @@
    products are pulled live from the public WooCommerce Store API.
    Tool connectors (GitHub, Codemagic, Apple Dev) are saved quick-links. */
 
-const CONNECTORS_KEY = 'mc-ros-connectors'
-const PRODUCTS_KEY = 'mc-ros-synced-products'
+import { readSection, writeSection, hydrateConsoleState } from './consoleState.js'
+
+/* Every load and save below reads and writes the console store in
+   consoleState.js: memory first, localStorage as cache, dev2 as the copy
+   every device shares. The functions stay synchronous, so the screens that
+   call them did not change. */
 
 export const DEFAULT_CONNECTORS = {
   website: { label: 'Website (WooCommerce)', url: 'https://dev2.meltingcheese.food', kind: 'products', ck: '', cs: '' },
@@ -16,9 +20,8 @@ export const DEFAULT_CONNECTORS = {
 
 export function loadConnectors() {
   try {
-    const raw = localStorage.getItem(CONNECTORS_KEY)
-    if (raw) {
-      const saved = JSON.parse(raw)
+    const saved = readSection('connectors')
+    if (saved && typeof saved === 'object') {
       const merged = {}
       for (const k of Object.keys(DEFAULT_CONNECTORS)) {
         merged[k] = { ...DEFAULT_CONNECTORS[k], ...(saved[k] || {}) }
@@ -30,13 +33,13 @@ export function loadConnectors() {
 }
 
 export function saveConnectors(connectors) {
-  localStorage.setItem(CONNECTORS_KEY, JSON.stringify(connectors))
+  writeSection('connectors', connectors)
 }
 
 export function loadSyncedProducts() {
   try {
-    const raw = localStorage.getItem(PRODUCTS_KEY)
-    if (raw) return JSON.parse(raw)
+    const saved = readSection('synced_products')
+    if (saved) return saved
   } catch (e) { /* ignore */ }
   return null
 }
@@ -104,7 +107,7 @@ export async function syncProducts(connectors) {
     errors,
     syncedAt: new Date().toISOString(),
   }
-  if (result.items.length) localStorage.setItem(PRODUCTS_KEY, JSON.stringify(result))
+  if (result.items.length) writeSection('synced_products', result)
   return result
 }
 
@@ -161,8 +164,6 @@ export function hasWriteAccess(connectors) {
    actually go on sale at that festival / activation. Membership is stored
    locally as a list of product ids per event. */
 
-const EVENTS_KEY = 'mc-ros-events'
-
 export const DEFAULT_EVENTS = [
   { id: 'aaf', name: 'All Africa Festival', venue: 'Dubai World Trade Centre', live: true, products: [] },
   { id: 'afroloud', name: 'Afro Loud', venue: 'Bluewaters Island', live: true, products: [] },
@@ -171,43 +172,37 @@ export const DEFAULT_EVENTS = [
 
 export function loadEvents() {
   try {
-    const raw = localStorage.getItem(EVENTS_KEY)
-    if (raw) {
-      const saved = JSON.parse(raw)
-      if (Array.isArray(saved) && saved.length) return saved
-    }
+    const saved = readSection('events')
+    if (Array.isArray(saved) && saved.length) return saved
   } catch (e) { /* fall through */ }
   return JSON.parse(JSON.stringify(DEFAULT_EVENTS))
 }
 
 export function saveEvents(events) {
-  localStorage.setItem(EVENTS_KEY, JSON.stringify(events))
+  writeSection('events', events)
 }
 
 /* ---- Crates -------------------------------------------------------------
    WooCommerce has no crate concept, so crate counts and crate size live
    in ROS only. Unit quantity and stock status still push to Woo. */
 
-const CRATES_KEY = 'mc-ros-crates'
 export const DEFAULT_CRATE_SIZE = 12
 
 export function loadCrates() {
   try {
-    const raw = localStorage.getItem(CRATES_KEY)
-    if (raw) return JSON.parse(raw)
+    const saved = readSection('crates')
+    if (saved && typeof saved === 'object') return saved
   } catch (e) { /* ignore */ }
   return {}
 }
 
 export function saveCrates(crates) {
-  localStorage.setItem(CRATES_KEY, JSON.stringify(crates))
+  writeSection('crates', crates)
 }
 
 /* ---- Food trucks --------------------------------------------------------
    A truck holds one deployment record per event: date, location and the
    equipment checklist for that outing. Stored locally like events/crates. */
-
-const TRUCKS_KEY = 'mc-ros-trucks'
 
 export const DEFAULT_EQUIPMENT = [
   'Griddle', 'Deep fryer', 'Gas cylinders', 'Generator',
@@ -221,17 +216,14 @@ export const DEFAULT_TRUCKS = [
 
 export function loadTrucks() {
   try {
-    const raw = localStorage.getItem(TRUCKS_KEY)
-    if (raw) {
-      const saved = JSON.parse(raw)
-      if (Array.isArray(saved)) return saved
-    }
+    const saved = readSection('trucks')
+    if (Array.isArray(saved)) return saved
   } catch (e) { /* fall through */ }
   return JSON.parse(JSON.stringify(DEFAULT_TRUCKS))
 }
 
 export function saveTrucks(trucks) {
-  localStorage.setItem(TRUCKS_KEY, JSON.stringify(trucks))
+  writeSection('trucks', trucks)
 }
 
 export function blankDeployment() {
@@ -243,8 +235,6 @@ export function blankDeployment() {
    (welcome/sign-in, search, location selector, footer) is fixed and is
    never part of the reorderable content. */
 
-const LAYOUTS_KEY = 'mc-ros-home-layouts'
-const BANNERS_KEY = 'mc-ros-banner-packs'
 
 /* Visible in the customer app preview but excluded from drag-and-drop. */
 export const FIXED_FRAME = [
@@ -309,14 +299,14 @@ export const DEFAULT_BANNER_PACKS = [
 
 export function loadBannerPacks() {
   try {
-    const raw = localStorage.getItem(BANNERS_KEY)
-    if (raw) { const s = JSON.parse(raw); if (Array.isArray(s) && s.length) return s }
+    const s = readSection('banner_packs')
+    if (Array.isArray(s) && s.length) return s
   } catch (e) { /* fall through */ }
   return JSON.parse(JSON.stringify(DEFAULT_BANNER_PACKS))
 }
 
 export function saveBannerPacks(packs) {
-  localStorage.setItem(BANNERS_KEY, JSON.stringify(packs))
+  writeSection('banner_packs', packs)
 }
 
 /* A layout is the ordered, per-event content below the fixed frame.
@@ -335,14 +325,14 @@ export function blankLayout() {
 
 export function loadLayouts() {
   try {
-    const raw = localStorage.getItem(LAYOUTS_KEY)
-    if (raw) return JSON.parse(raw)
+    const saved = readSection('home_layouts')
+    if (saved && typeof saved === 'object') return saved
   } catch (e) { /* ignore */ }
   return {}
 }
 
 export function saveLayouts(layouts) {
-  localStorage.setItem(LAYOUTS_KEY, JSON.stringify(layouts))
+  writeSection('home_layouts', layouts)
 }
 
 /* Age of the last sync in minutes, or null if never synced. */
@@ -370,7 +360,6 @@ const APP_CONFIG_HOST = 'https://dev2.meltingcheese.food'
 const APP_CONFIG_URL = APP_CONFIG_HOST + '/wp-json/mc/v1/app-config'
 const WHOAMI_URL = APP_CONFIG_HOST + '/wp-json/mc/v1/whoami'
 const TOKEN_KEY = 'mc-ros-api-token'
-const PUBLISH_KEY = 'mc-ros-publish-state'
 
 /* One credential for everything the console writes: the app layout, the media
    library and products. It is issued in WordPress under Users -> API Tokens
@@ -391,6 +380,10 @@ export function saveApiToken(token) {
   const clean = String(token || '').trim()
   if (clean) localStorage.setItem(TOKEN_KEY, clean)
   else localStorage.removeItem(TOKEN_KEY)
+  /* A token is what lets this device read the shared console state, so the
+     moment one is entered, fetch it. Screens pick the data up on their next
+     mount; nothing here blocks the operator. */
+  if (clean) hydrateConsoleState()
 }
 
 export function hasApiToken() {
@@ -410,14 +403,14 @@ function tokenHeaders(extra) {
 
 export function loadPublishState() {
   try {
-    const raw = localStorage.getItem(PUBLISH_KEY)
-    if (raw) return JSON.parse(raw)
+    const saved = readSection('publish_state')
+    if (saved) return saved
   } catch (e) { /* ignore */ }
   return null
 }
 
 export function savePublishState(state) {
-  localStorage.setItem(PUBLISH_KEY, JSON.stringify(state))
+  writeSection('publish_state', state)
 }
 
 /* Confirms a token works before the operator relies on it. Distinguishes the
@@ -709,17 +702,14 @@ export async function saveProduct(connectors, product) {
    TestFlight build on iOS), which read them from mc/v1/app-config.
    ========================================================================= */
 
-const RELEASES_KEY = 'mc-ros-app-releases'
-
 export const BLANK_RELEASE = {
   minBuild: 0, latestBuild: 0, versionName: '', apkUrl: '', sha256: '', notes: '',
 }
 
 export function loadReleases() {
   try {
-    const raw = localStorage.getItem(RELEASES_KEY)
-    if (raw) {
-      const parsed = JSON.parse(raw)
+    const parsed = readSection('app_releases')
+    if (parsed && typeof parsed === 'object') {
       return {
         android: { ...BLANK_RELEASE, ...(parsed.android || {}) },
         ios: { ...BLANK_RELEASE, ...(parsed.ios || {}) },
@@ -730,7 +720,7 @@ export function loadReleases() {
 }
 
 export function saveReleases(releases) {
-  localStorage.setItem(RELEASES_KEY, JSON.stringify(releases))
+  writeSection('app_releases', releases)
 }
 
 /* Refuses the one combination that cannot be undone from the console: a
