@@ -180,13 +180,14 @@ export default function SyncPanel({ onSynced, lastSync, autoSync = true }) {
                 </span>
               </div>
               <div style={{ ...muted, marginBottom: 9, color: 'var(--ink-2)' }}>
-                One token covers publishing the app home layout, uploading images and
-                saving products. It acts as the WordPress account that issued it, so it
-                can never do more than that person can.
+                Logging in issues this automatically - you normally never touch it.
+                It acts as the account that issued it, so it can never do more than
+                that person can. Paste a token by hand only for a machine credential
+                (Users → API Tokens in WordPress) or if login is unavailable.
               </div>
 
               <label style={{ fontSize: 11, fontWeight: 700, display: 'block', marginBottom: 3 }}>
-                API token
+                Access token <span style={{ fontWeight: 400, color: 'var(--ink-3)' }}>(set by login; advanced)</span>
               </label>
               <input style={field} type={showSecret ? 'text' : 'password'} value={token}
                 placeholder="mck_..."
