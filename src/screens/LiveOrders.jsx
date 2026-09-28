@@ -87,9 +87,9 @@ export default function LiveOrders() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, eventId, truckId, connected])
 
-  const advance = async (order, to) => {
+  const advance = async (order, to, extra) => {
     setBusyId(order.order_id)
-    const res = await setOrderStatus(order.order_id, to)
+    const res = await setOrderStatus(order.order_id, to, extra)
     setBusyId(null)
     if (!res.ok) { setStatus(res); return }
     // Replace in place so the row does not jump while being looked at.
@@ -195,7 +195,20 @@ export default function LiveOrders() {
 
 /* ---------------- one order ---------------- */
 
+/* The server refuses a cancellation without a reason code, because the
+   whole point of recording one is counting no-shows later. */
+const CANCEL_REASONS = [
+  ['no_show', 'Not collected'],
+  ['sold_out', 'Sold out'],
+  ['closing', 'Kitchen closing'],
+  ['duplicate', 'Duplicate order'],
+  ['customer_asked', 'Guest asked'],
+  ['other', 'Other'],
+]
+
 function OrderCard({ order, busy, onAdvance, onAssign }) {
+  const [cancelling, setCancelling] = useState(false)
+  const [reason, setReason] = useState('no_show')
   const state = orderState(order.status)
   const next = nextOrderState(order.status)
   const nextLabel = next ? orderState(next).label : null
@@ -287,10 +300,10 @@ function OrderCard({ order, busy, onAdvance, onAssign }) {
           </button>
         )}
 
-        {!done && (
+        {!done && !cancelling && (
           <div style={{ marginTop: 8 }}>
             <button
-              onClick={() => onAdvance(order, 'cancelled')}
+              onClick={() => setCancelling(true)}
               disabled={busy}
               style={{
                 fontSize: 11, color: 'var(--red)', fontWeight: 700,
@@ -298,6 +311,24 @@ function OrderCard({ order, busy, onAdvance, onAssign }) {
               }}>
               Cancel
             </button>
+          </div>
+        )}
+        {!done && cancelling && (
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <select value={reason} onChange={e => setReason(e.target.value)}
+              style={{ fontSize: 11.5, padding: '5px 6px', borderRadius: 6, border: '1px solid var(--line)' }}>
+              {CANCEL_REASONS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button disabled={busy}
+                onClick={() => { setCancelling(false); onAdvance(order, 'cancelled', { reason }) }}
+                style={{ fontSize: 11, color: '#fff', background: 'var(--red)', fontWeight: 700, borderRadius: 6, padding: '5px 9px' }}>
+                {busy ? 'Saving…' : 'Confirm cancel'}
+              </button>
+              <button onClick={() => setCancelling(false)} style={{ fontSize: 11, color: 'var(--ink-2)', background: 'none' }}>
+                Keep
+              </button>
+            </div>
           </div>
         )}
       </div>
