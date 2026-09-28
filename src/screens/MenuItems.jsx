@@ -236,7 +236,7 @@ export default function MenuItems() {
                 marginTop: 10, fontSize: 11, padding: '7px 9px', borderRadius: 8,
                 background: 'var(--amber-chip)', color: 'var(--mc-orange-deep)', fontWeight: 600,
               }}>
-                No API key yet — open Sync and add a WooCommerce Read/Write key to enable pushing.
+                Not logged in — log in to push changes to the store.
               </div>
             )}
           </div>

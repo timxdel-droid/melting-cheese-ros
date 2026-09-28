@@ -165,7 +165,7 @@ export default function Inventory() {
             ...sel, fontWeight: 700, cursor: dirty ? 'pointer' : 'default',
             opacity: dirty ? 1 : 0.5,
           }}>💾 Save{dirty ? ' (' + dirty + ')' : ''}</button>
-          <button onClick={push} disabled={!dirty || pushing || !canPush} title={canPush ? '' : 'Add a WooCommerce API key in the Sync panel to enable push'} style={{
+          <button onClick={push} disabled={!dirty || pushing || !canPush} title={canPush ? '' : 'Log in to push changes'} style={{
             border: 'none', borderRadius: 8, padding: '8px 14px', fontSize: 12, fontWeight: 700, color: '#fff',
             background: 'var(--green)', opacity: (dirty && canPush && !pushing) ? 1 : 0.45,
             cursor: (dirty && canPush && !pushing) ? 'pointer' : 'default',
@@ -183,7 +183,7 @@ export default function Inventory() {
       {dirty > 0 && !canPush && (
         <div style={{ fontSize: 11.5, padding: '8px 12px', borderRadius: 8, background: 'var(--amber-chip)', color: 'var(--mc-orange-deep)' }}>
           Save keeps these figures in ROS. To push stock out to the website and app,
-          add a WooCommerce API key pair in the Sync panel.
+          log in first.
         </div>
       )}
 

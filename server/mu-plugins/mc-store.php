@@ -358,6 +358,22 @@ function mc_store_save_product( WP_REST_Request $request ) {
 		$product->set_category_ids( array_values( array_filter( array_map( 'intval', $body['categories'] ) ) ) );
 	}
 
+	// Stock. Inventory and Menu Items used to push these straight to
+	// WooCommerce's wc/v3 with a consumer key pair kept in the browser;
+	// they now come through here with the operator's own token instead.
+	if ( isset( $body['stock_status'] ) && in_array( $body['stock_status'], array( 'instock', 'outofstock' ), true ) ) {
+		$product->set_stock_status( $body['stock_status'] );
+	}
+	if ( array_key_exists( 'stock_quantity', $body ) ) {
+		if ( null === $body['stock_quantity'] || '' === $body['stock_quantity'] ) {
+			// Stop counting: WooCommerce goes back to a plain in/out flag.
+			$product->set_manage_stock( false );
+		} else {
+			$product->set_manage_stock( true );
+			$product->set_stock_quantity( max( 0, (int) $body['stock_quantity'] ) );
+		}
+	}
+
 	// Images arrive as attachment ids the console already uploaded via
 	// /mc/v1/media. First is the main image, the rest become the gallery.
 	if ( isset( $body['images'] ) && is_array( $body['images'] ) ) {
