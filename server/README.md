@@ -10,7 +10,10 @@ here — there is no other copy.
 | `mc-store.php` | `mc/v1/products`, `mc/v1/media` — the menu both apps read. |
 | `mc-ingredients.php` | Ingredient lists attached to products. |
 | `mc-app-config.php` | `mc/v1/app-config` (home layout, banners, events, release gates) and `mc/v1/releases/report`, which Codemagic posts to after a TestFlight upload. |
-| `mc-orders.php` | `mc/v1/orders` — the apps place orders, the console reads and updates them. Owns add-on prices server-side so a tampered client cannot change what anything costs. |
+| `mc-orders.php` | `mc/v1/orders` — the apps place orders, the console reads and updates them. Owns add-on prices server-side so a tampered client cannot change what anything costs. **28 Sep:** kitchen lifecycle — derived `kitchen_status`, per-order `revision` (409 on stale), `action_id`/`edit_id` dedupe, cancel reason codes, `POST /orders/{id}/items` declarative edits, ETag/304 on the list. |
+| `mc-console.php` | `mc/v1/console-state` — the ROS console's working state (events, trucks, layouts, banner packs…) stored on the server so every device sees the same setup. Per-section revisions; secrets stripped. |
+| `mc-login.php` | `mc/v1/login`, `logout`, `me` — username + password for people; mints a 12 h / 30 d session token through mc-auth so every existing gate accepts it. |
+| `mc-privacy.php` | Closes user enumeration: `wp/v2/users` 401 for anyone without `list_users`, author archives 404 for visitors, oEmbed author stripped, generic login / lost-password messages. |
 
 ## These files are deployed automatically
 
