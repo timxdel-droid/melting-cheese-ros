@@ -1,25 +1,22 @@
 import { useState, useEffect, useRef } from 'react'
 import {
-  fetchOrders, setOrderStatus, setOrderTruck, ORDER_STATES, orderState, nextOrderState,
+  fetchOrders, setOrderTruck, KITCHEN_STATES, kitchenState, CANCEL_REASON_LABELS,
   hasApiToken, loadEvents, loadTrucks, trucksAtEvent,
 } from '../lib/connectors.js'
 
 /* Screen: Live Orders
 
-   Orders placed in the customer apps, as they arrive. This is a working
-   screen — someone stands at a truck with it open — so the priorities are
-   different from the rest of the console:
+   Orders placed in the customer apps, as they arrive - and, since 29 Sep,
+   a WATCH screen. Timothy's decision: the kitchen tablet drives status
+   (accept, ready, collected, cancel with a reason); the console shows what
+   the kitchen did and when. Two screens both able to move an order is how
+   a docket gets marked collected by someone who never saw the guest.
 
-     - The next action is one tap, and it is the big button.
-     - Collection code is the largest thing on the card, because that is what
-       the customer says out loud.
-     - It refreshes itself. Nobody should have to remember to press reload
-       while handing over food.
-     - Nothing here destroys anything. Cancel is a status change, and the
-       order stays in WooCommerce.
+   What the office still does here: put an order on a truck. That is a
+   deployment decision, not a cooking one.
 
-   Deliberately not on this screen: totals, refunds, customer records. Those
-   live in WooCommerce, which already does them properly. */
+   Priorities unchanged: the collection code is the biggest thing on the
+   card, it refreshes itself, and nothing here destroys anything. */
 
 const REFRESH_MS = 20000
 
@@ -45,7 +42,7 @@ function Pill({ tone, children }) {
 
 export default function LiveOrders() {
   const [orders, setOrders] = useState([])
-  const [filter, setFilter] = useState('on-hold')
+  const [filter, setFilter] = useState('active')
   const [eventId, setEventId] = useState('')
   const [truckId, setTruckId] = useState('')
   const [status, setStatus] = useState(null)
@@ -60,8 +57,13 @@ export default function LiveOrders() {
   const load = async (quiet) => {
     if (!connected) return
     if (!quiet) setLoading(true)
+    // 'active' is on-hold + processing on the server (what the kitchen
+    // polls). The finer split into received / cooking / ready is done here
+    // from kitchen_status, which the server derives.
+    const serverStatus = filter === 'all' ? null
+      : (filter === 'collected' ? 'completed' : (filter === 'cancelled' ? 'cancelled' : 'active'))
     const res = await fetchOrders({
-      status: filter === 'all' ? null : filter,
+      status: serverStatus,
       event: eventId || null,
       truck: truckId || null,
     })
@@ -87,15 +89,6 @@ export default function LiveOrders() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter, eventId, truckId, connected])
 
-  const advance = async (order, to, extra) => {
-    setBusyId(order.order_id)
-    const res = await setOrderStatus(order.order_id, to, extra)
-    setBusyId(null)
-    if (!res.ok) { setStatus(res); return }
-    // Replace in place so the row does not jump while being looked at.
-    setOrders(list => list.map(o => o.order_id === res.order.order_id ? res.order : o))
-  }
-
   const assign = async (order, truckId) => {
     setBusyId(order.order_id)
     const res = await setOrderTruck(order.order_id, truckId)
@@ -104,10 +97,13 @@ export default function LiveOrders() {
     setOrders(list => list.map(o => o.order_id === res.order.order_id ? res.order : o))
   }
 
-  const counts = ORDER_STATES.reduce((acc, s) => {
-    acc[s.id] = orders.filter(o => o.status === s.id).length
+  const counts = KITCHEN_STATES.reduce((acc, s) => {
+    acc[s.id] = orders.filter(o => o.kitchen_status === s.id).length
     return acc
   }, {})
+  const shown = ['received', 'preparing', 'ready'].includes(filter)
+    ? orders.filter(o => o.kitchen_status === filter)
+    : orders
 
   return (
     <div style={{ padding: '20px 24px' }}>
@@ -126,8 +122,9 @@ export default function LiveOrders() {
       </div>
 
       <div style={{ ...muted, marginBottom: 16, lineHeight: 1.5 }}>
-        Orders from the customer apps. Payment is taken at the truck, so every
-        order arrives as <b>Received</b> and is walked forward from here.
+        Orders from the customer apps, as the kitchen works them. The kitchen tablet
+        accepts, marks ready, hands over and cancels; this screen watches. Payment is
+        taken at the truck.
       </div>
 
       {!connected && (
@@ -141,9 +138,12 @@ export default function LiveOrders() {
       {/* Filters */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
         <Seg
-          options={[['on-hold', 'Received' + (counts['on-hold'] ? ' · ' + counts['on-hold'] : '')],
-                    ['processing', 'Preparing' + (counts['processing'] ? ' · ' + counts['processing'] : '')],
-                    ['completed', 'Collected'],
+          options={[['active', 'In kitchen' + (orders.length && ['active','received','preparing','ready'].includes(filter) ? ' · ' + orders.length : '')],
+                    ['received', 'New' + (counts.received ? ' · ' + counts.received : '')],
+                    ['preparing', 'Cooking' + (counts.preparing ? ' · ' + counts.preparing : '')],
+                    ['ready', 'Ready' + (counts.ready ? ' · ' + counts.ready : '')],
+                    ['collected', 'Collected'],
+                    ['cancelled', 'Cancelled'],
                     ['all', 'All']]}
           value={filter}
           onChange={setFilter}
@@ -166,7 +166,7 @@ export default function LiveOrders() {
         </select>
       </div>
 
-      {connected && !orders.length && !loading && (
+      {connected && !shown.length && !loading && (
         <div className="card" style={{ padding: 30, textAlign: 'center' }}>
           <div style={{ fontSize: 28, marginBottom: 8 }}>🛎</div>
           <b style={{ fontSize: 14 }}>Nothing here yet</b>
@@ -179,12 +179,11 @@ export default function LiveOrders() {
       )}
 
       <div style={{ display: 'grid', gap: 10 }}>
-        {orders.map(o => (
+        {shown.map(o => (
           <OrderCard
             key={o.order_id}
             order={o}
             busy={busyId === o.order_id}
-            onAdvance={advance}
             onAssign={assign}
           />
         ))}
@@ -195,27 +194,21 @@ export default function LiveOrders() {
 
 /* ---------------- one order ---------------- */
 
-/* The server refuses a cancellation without a reason code, because the
-   whole point of recording one is counting no-shows later. */
-const CANCEL_REASONS = [
-  ['no_show', 'Not collected'],
-  ['sold_out', 'Sold out'],
-  ['closing', 'Kitchen closing'],
-  ['duplicate', 'Duplicate order'],
-  ['customer_asked', 'Guest asked'],
-  ['other', 'Other'],
-]
-
-function OrderCard({ order, busy, onAdvance, onAssign }) {
-  const [cancelling, setCancelling] = useState(false)
-  const [reason, setReason] = useState('no_show')
-  const state = orderState(order.status)
-  const next = nextOrderState(order.status)
-  const nextLabel = next ? orderState(next).label : null
-  const done = order.status === 'completed' || order.status === 'cancelled'
+function OrderCard({ order, busy, onAssign }) {
+  const ks = kitchenState(order.kitchen_status)
+  const done = ks.id === 'collected' || ks.id === 'cancelled'
 
   const placed = order.placed_at ? new Date(order.placed_at) : null
   const minsAgo = placed ? Math.round((Date.now() - placed.getTime()) / 60000) : null
+  const t = iso => iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null
+
+  // The kitchen's timeline for this order, in the order it happened.
+  const steps = [
+    ['Placed', t(order.placed_at)],
+    ['Accepted', t(order.accepted_at)],
+    ['Ready', t(order.ready_at)],
+    ks.id === 'cancelled' ? ['Cancelled', t(order.cancelled_at)] : ['Collected', t(order.completed_at)],
+  ]
 
   return (
     <div className="card" style={{ padding: 14, display: 'flex', gap: 16, alignItems: 'flex-start' }}>
@@ -230,12 +223,10 @@ function OrderCard({ order, busy, onAdvance, onAssign }) {
 
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-          <Pill tone={state.tone}>{state.label}</Pill>
+          <Pill tone={ks.tone}>{ks.label}</Pill>
           {order.customer && <b style={{ fontSize: 13 }}>{order.customer}</b>}
           {order.platform && <span style={muted}>{order.platform}</span>}
           {minsAgo != null && (
-            /* Ageing matters when someone is waiting. Past ten minutes on an
-               uncollected order, say so plainly rather than in grey. */
             <span style={{
               ...muted,
               color: !done && minsAgo >= 10 ? 'var(--red)' : 'var(--ink-3)',
@@ -244,21 +235,46 @@ function OrderCard({ order, busy, onAdvance, onAssign }) {
               {minsAgo < 1 ? 'just now' : minsAgo + ' min ago'}
             </span>
           )}
+          {order.edits && order.edits.length > 0 && <Pill tone="amber">edited</Pill>}
         </div>
 
         <div style={{ fontSize: 12.5, lineHeight: 1.7 }}>
           {(order.items || []).map((it, i) => (
             <div key={i}>
               <b>{it.quantity}×</b> {it.name}
+              {it.extras && <span style={muted}> + {it.extras}</span>}
+              {it.note && <span style={{ ...muted, fontStyle: 'italic' }}> “{it.note}”</span>}
             </div>
+          ))}
+          {(order.fees || []).map((f, i) => (
+            <div key={'f' + i} style={muted}>{f.name} · {f.total}</div>
           ))}
         </div>
 
-        {order.phone && <div style={{ ...muted, marginTop: 6 }}>{order.phone}</div>}
+        {order.note && <div style={{ ...muted, marginTop: 4, fontStyle: 'italic' }}>Guest: “{order.note}”</div>}
+        {order.phone && <div style={{ ...muted, marginTop: 4 }}>{order.phone}</div>}
 
-        {/* Assignment is manual. The list is limited to trucks actually
-            deployed to this order's event, and the server re-checks that —
-            a truck that is not at the venue is a wasted trip. */}
+        {ks.id === 'cancelled' && (
+          <div style={{ marginTop: 8, fontSize: 12, color: 'var(--red)', fontWeight: 600 }}>
+            Cancelled — {CANCEL_REASON_LABELS[order.cancel_reason_code] || order.cancel_reason_code || 'no reason recorded'}
+            {order.cancel_reason && <span style={{ fontWeight: 400 }}> · “{order.cancel_reason}”</span>}
+          </div>
+        )}
+
+        {order.edits && order.edits.length > 0 && (
+          <div style={{ marginTop: 8, fontSize: 11.5, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+            {order.edits.map((e, i) => (
+              <div key={i}>
+                <b>Edited</b> {t(e.at)} by {e.by}: {e.summary}
+                <span style={muted}> ({e.old_total} → {e.new_total})</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Assignment is manual and still the office's call. The list is
+            limited to trucks actually deployed to this order's event, and
+            the server re-checks that. */}
         {!done && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
             <span style={muted}>Truck</span>
@@ -272,8 +288,8 @@ function OrderCard({ order, busy, onAdvance, onAssign }) {
                 color: order.truck ? 'var(--ink)' : 'var(--ink-3)',
               }}>
               <option value="">Unassigned</option>
-              {trucksAtEvent(order.event).map(t => (
-                <option key={t.id} value={t.id}>{t.name}</option>
+              {trucksAtEvent(order.event).map(tr => (
+                <option key={tr.id} value={tr.id}>{tr.name}</option>
               ))}
             </select>
             {!order.truck && <span style={{ ...muted, color: 'var(--mc-orange-deep)' }}>needs a truck</span>}
@@ -281,56 +297,19 @@ function OrderCard({ order, busy, onAdvance, onAssign }) {
         )}
       </div>
 
-      <div style={{ textAlign: 'right' }}>
+      <div style={{ textAlign: 'right', minWidth: 130 }}>
         <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>
           {order.total} {order.currency}
         </div>
-
-        {next && (
-          <button
-            onClick={() => onAdvance(order, next)}
-            disabled={busy}
-            style={{
-              background: 'var(--mc-orange)', color: '#fff', fontWeight: 700,
-              fontSize: 12.5, padding: '9px 16px', borderRadius: 8,
-              cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
-              whiteSpace: 'nowrap',
-            }}>
-            {busy ? 'Saving…' : 'Mark ' + nextLabel}
-          </button>
-        )}
-
-        {!done && !cancelling && (
-          <div style={{ marginTop: 8 }}>
-            <button
-              onClick={() => setCancelling(true)}
-              disabled={busy}
-              style={{
-                fontSize: 11, color: 'var(--red)', fontWeight: 700,
-                cursor: busy ? 'default' : 'pointer', background: 'none',
-              }}>
-              Cancel
-            </button>
-          </div>
-        )}
-        {!done && cancelling && (
-          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <select value={reason} onChange={e => setReason(e.target.value)}
-              style={{ fontSize: 11.5, padding: '5px 6px', borderRadius: 6, border: '1px solid var(--line)' }}>
-              {CANCEL_REASONS.map(([id, label]) => <option key={id} value={id}>{label}</option>)}
-            </select>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button disabled={busy}
-                onClick={() => { setCancelling(false); onAdvance(order, 'cancelled', { reason }) }}
-                style={{ fontSize: 11, color: '#fff', background: 'var(--red)', fontWeight: 700, borderRadius: 6, padding: '5px 9px' }}>
-                {busy ? 'Saving…' : 'Confirm cancel'}
-              </button>
-              <button onClick={() => setCancelling(false)} style={{ fontSize: 11, color: 'var(--ink-2)', background: 'none' }}>
-                Keep
-              </button>
+        {/* What the kitchen did, and when. No buttons: status is the tablet's. */}
+        <div style={{ display: 'grid', gap: 2, fontSize: 11 }}>
+          {steps.map(([label, when]) => (
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, color: when ? 'var(--ink-2)' : 'var(--ink-3)' }}>
+              <span>{label}</span><span style={{ fontVariantNumeric: 'tabular-nums' }}>{when || '—'}</span>
             </div>
-          </div>
-        )}
+          ))}
+        </div>
+        <div style={{ ...muted, marginTop: 8 }}>rev {order.revision || 1}</div>
       </div>
     </div>
   )

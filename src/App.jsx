@@ -19,6 +19,7 @@ import HomeBuilder from './screens/HomeBuilder.jsx'
 import BannerLibrary from './screens/BannerLibrary.jsx'
 import AppReleases from './screens/AppReleases.jsx'
 import LiveOrders from './screens/LiveOrders.jsx'
+import KitchenTablets from './screens/KitchenTablets.jsx'
 import ProductEditor from './screens/ProductEditor.jsx'
 import Placeholder from './screens/Placeholder.jsx'
 
@@ -66,6 +67,7 @@ export default function App() {
         <Route path="/inventory" element={<Inventory />} />
         <Route path="/staff" element={<Staff />} />
         <Route path="/trucks" element={<FoodTrucks />} />
+        <Route path="/kitchen-tablets" element={<KitchenTablets />} />
         <Route path="/kiosks" element={<Placeholder title="Kiosks" />} />
         <Route path="/emenu" element={<Placeholder title="eMenu (QR)" />} />
         <Route path="/analytics" element={<Placeholder title="Analytics & Reports" />} />

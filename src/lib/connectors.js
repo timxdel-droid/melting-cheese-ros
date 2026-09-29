@@ -873,6 +873,65 @@ export async function setOrderStatus(orderId, status, extra) {
   }
 }
 
+/* ---- Devices & tokens (mc-devices.php) -----------------------------------
+   Per-tablet kitchen tokens, issued from the console. The secret comes back
+   exactly once from issueDeviceToken(); nothing here stores it. */
+
+export async function listTokens() {
+  if (!hasApiToken()) return { ok: false, message: 'Log in first.' }
+  try {
+    const res = await fetch(STORE_API + '/tokens', { headers: tokenHeaders() })
+    if (!res.ok) return { ok: false, message: await storeError(res, 'Could not list devices') }
+    return { ok: true, tokens: await res.json() }
+  } catch (e) {
+    return { ok: false, message: 'Could not reach the server: ' + e.message }
+  }
+}
+
+export async function issueDeviceToken(label) {
+  if (!hasApiToken()) return { ok: false, message: 'Log in first.' }
+  try {
+    const res = await fetch(STORE_API + '/tokens', {
+      method: 'POST',
+      headers: tokenHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ label }),
+    })
+    if (!res.ok) return { ok: false, message: await storeError(res, 'Could not issue a token') }
+    return { ok: true, issued: await res.json() }
+  } catch (e) {
+    return { ok: false, message: 'Could not reach the server: ' + e.message }
+  }
+}
+
+export async function revokeToken(id) {
+  if (!hasApiToken()) return { ok: false, message: 'Log in first.' }
+  try {
+    const res = await fetch(STORE_API + '/tokens/' + encodeURIComponent(id), {
+      method: 'DELETE', headers: tokenHeaders(),
+    })
+    if (!res.ok) return { ok: false, message: await storeError(res, 'Could not revoke') }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, message: 'Could not reach the server: ' + e.message }
+  }
+}
+
+/* The kitchen's view of an order, as the server derives it. */
+export const KITCHEN_STATES = [
+  { id: 'received',  label: 'Received',  tone: 'amber' },
+  { id: 'preparing', label: 'Cooking',   tone: 'blue'  },
+  { id: 'ready',     label: 'Ready',     tone: 'green' },
+  { id: 'collected', label: 'Collected', tone: 'gray'  },
+  { id: 'cancelled', label: 'Cancelled', tone: 'red'   },
+]
+export function kitchenState(id) {
+  return KITCHEN_STATES.find(s => s.id === id) || { id, label: id || '—', tone: 'gray' }
+}
+export const CANCEL_REASON_LABELS = {
+  no_show: 'Not collected', sold_out: 'Sold out', closing: 'Kitchen closing',
+  duplicate: 'Duplicate order', customer_asked: 'Guest asked', other: 'Other',
+}
+
 export const INGREDIENT_UNITS = ['', 'g', 'kg', 'ml', 'l', 'pcs', 'portion', 'tbsp', 'tsp', 'slice', 'scoop']
 
 /* Which app builds the device preview is drawn to match. Bump on each
