@@ -73,6 +73,7 @@ const NAV = [
   { to: '/inventory', label: 'Inventory', icon: '📦' },
   { to: '/staff', label: 'Staff & Roles', icon: '👥' },
   { to: '/trucks', label: 'Food Trucks', icon: '🚚' },
+  { to: '/kitchen-tablets', label: 'Kitchen Tablets', icon: '📟' },
   { to: '/kiosks', label: 'Kiosks', icon: '🖥' },
   { to: '/emenu', label: 'eMenu (QR)', icon: '▣' },
   { label: 'GROWTH', heading: true },
